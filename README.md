@@ -1,52 +1,67 @@
-# 📊 Sistema de Cálculo de Diferenças de Classe - PC/AL
+# ⚖️ Sistema de Cálculo PC/AL - Versão Cronológica por Promoção
 
-Este sistema automatiza o cálculo de diferenças remuneratórias com base em promoções por classe (15% por nível), utilizando como fonte:
+Este sistema permite calcular automaticamente diferenças remuneratórias de servidores públicos com base na **progressão funcional** (promoções por classe) conforme fichas **financeiras** e **cadastrais** em formato PDF.
 
-- 📄 **Ficha Financeira** (PDF ou Excel)
-- 🧾 **Ficha Cadastral** (PDFs com promoções e códigos de classe)
+---
 
 ## ✅ Funcionalidades
 
-- Leitura automática dos arquivos via OCR e parsing.
-- Reconhecimento cronológico de promoções.
-- Aplicação correta do fator de 15% entre classes (A até G).
-- Exportação de:
-  - 📄 Laudo Técnico Pericial em PDF
-  - 📊 Planilha Excel formatada
-  - 🧾 Arquivo .TXT compatível com Projefweb
+- 📂 Leitura de ficha financeira (valores pagos por mês).
+- 🧾 Leitura da ficha cadastral (datas de promoção e classe).
+- 📅 Identificação correta do mês/ano em que a promoção passa a valer.
+- 🧠 Cálculo do valor devido com base na classe correta mês a mês.
+- 📄 Exportação em:
+  - Laudo técnico PDF
+  - Planilha Excel (opcional)
+  - TXT no padrão do sistema **Projefweb**
 
-## 🚀 Como Executar
+---
 
-1. Instale os requisitos:
+## 📦 Como Executar
+
+1. Instale os pacotes:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-2. Execute o app com Streamlit:
+2. Execute com Streamlit:
 
 ```bash
-streamlit run app_cronologia_final.py
+streamlit run app_cronologia_promocao_mensal.py
 ```
 
-## 📂 Uploads
+---
 
-- Ficha Financeira: PDF, Excel (.xls, .xlsx) ou CSV.
-- Ficha Cadastral: Um ou mais PDFs com histórico de promoções.
+## 📁 Uploads Esperados
 
-## 🛠 Tecnologias
+- **Ficha Financeira**: PDF com colunas de meses e campo "Ano Comp".
+- **Ficha Cadastral**: Um ou mais PDFs com datas de promoção e códigos como `AGPMNJ4F40`, `PCEG440`, etc.
 
-- Python + Streamlit
-- FPDF (PDF formal jurídico)
-- pdfplumber + pypdf (OCR/Leitura)
-- Pandas + Plotly
-- XlsxWriter
+---
 
-## 📌 Observações
+## 🧮 Fórmula Aplicada
 
-- Classe inicial é considerada "A" caso não haja dados anteriores.
-- É usada a **cronologia real** dos documentos, com transições mensais.
+Para cada mês:
 
-## ⚖️ Exemplo de Aplicação
+```
+Valor Devido = BaseClasseA * (1.15 ^ Nível)
+```
 
-> Usado para gerar laudos técnicos de diferenças salariais de servidores públicos estaduais com base na evolução funcional.
+Diferença = Valor Devido - Valor Pago
+
+---
+
+## 📌 Observações Técnicas
+
+- Datas como `01/11/2022` são aplicadas a partir do mês **11/2022**.
+- A classe anterior se mantém até a nova promoção.
+- O valor base da Classe A é configurável na interface.
+
+---
+
+## 👨‍⚖️ Aplicação
+
+Sistema ideal para gerar cálculos em ações judiciais, perícias técnicas, defesas administrativas e projeções de impacto financeiro.
+
+---
