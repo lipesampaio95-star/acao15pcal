@@ -53,18 +53,23 @@ def ler_financeiro(file):
         linhas = ocr_pdf(file.read())
 
     dados = []
-    ano = None
+    ano_detectado = None
+
     for linha in linhas:
-        if not ano:
-            m = re.search(r'(20\d{2})', linha)
-            if m:
-                ano = int(m.group(1))
-        if any(p in linha.upper() for p in ["SUBSÍDIO", "VENC", "REMUN"]):
-            numeros = extrair_numeros_linha(linha)
-            for i, valor in enumerate(numeros[:12]):
+        if not ano_detectado:
+            match_ano = re.search(r'(20\d{2})', linha)
+            if match_ano:
+                ano_detectado = int(match_ano.group(1))
+
+        numeros = extrair_numeros_linha(linha)
+        numeros_salario = [n for n in numeros if n > 1200]
+
+        if len(numeros_salario) >= 3 and ano_detectado:
+            for i, valor in enumerate(numeros_salario[:12]):
                 mes = i + 1
-                data = pd.to_datetime(f"{ano}-{mes:02d}-01")
+                data = pd.to_datetime(f"{ano_detectado}-{mes:02d}-01")
                 dados.append({"Data": data, "Valor_Pago": valor})
+
     return pd.DataFrame(dados)
 
 def ler_carreira(arquivos):
