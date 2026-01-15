@@ -206,4 +206,4 @@ if executar:
             txt_bytes = gerar_txt_projefweb(df_calc)
 
             colpdf.download_button("📄 Baixar Laudo PDF", pdf_bytes, "laudo.pdf", "application/pdf")
-            coltxt.download_button("📑 Baixar Projefweb TXT", txt_bytes, "projef
+coltxt.download_button("📑 Baixar Projefweb TXT", txt_bytes, "projefweb.txt", "text/plain")
