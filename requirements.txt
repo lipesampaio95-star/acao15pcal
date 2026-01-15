@@ -2,6 +2,7 @@ streamlit
 pandas
 plotly
 fpdf
+pypdf
+pdfplumber
 xlsxwriter
 openpyxl
-pypdf
