@@ -1,5 +1,3 @@
-# Arquivo: app_cronologia_final_corrigido.py
-
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
@@ -51,19 +49,22 @@ def ler_financeiro(file):
         linhas = ocr_pdf(file.read())
 
     dados = []
-    ano_detectado = None
+    ano_atual = None
+    meses_port = ['JANEIRO','FEVEREIRO','MARCO','ABRIL','MAIO','JUNHO','JULHO','AGOSTO','SETEMBRO','OUTUBRO','NOVEMBRO','DEZEMBRO']
+
     for linha in linhas:
-        if not ano_detectado:
-            match = re.search(r"(20\d{2})", linha)
-            if match:
-                ano_detectado = int(match.group(1))
-        numeros = extrair_numeros_linha(linha)
-        numeros_salario = [n for n in numeros if n > 1200]
-        if len(numeros_salario) >= 3 and ano_detectado:
-            for i, valor in enumerate(numeros_salario[:12]):
-                mes = i + 1
-                data = pd.to_datetime(f"{ano_detectado}-{mes:02d}-01")
-                dados.append({"Data": data, "Valor_Pago": valor})
+        linha_up = linha.upper()
+        ano_match = re.search(r"ANO\s*COMP[:\s]+(20\d{2})", linha_up)
+        if ano_match:
+            ano_atual = int(ano_match.group(1))
+
+        for idx, mes_nome in enumerate(meses_port):
+            if mes_nome in linha_up and ano_atual:
+                numeros = extrair_numeros_linha(linha)
+                sal = [n for n in numeros if n > 1200]
+                if sal:
+                    data = pd.to_datetime(f"{ano_atual}-{idx+1:02d}-01")
+                    dados.append({"Data": data, "Valor_Pago": sal[0]})
     return pd.DataFrame(dados)
 
 def ler_cadastral(arquivos):
@@ -96,12 +97,12 @@ def ler_cadastral(arquivos):
     return df
 
 def calcular(df_fin, df_car, base):
-    df_car = df_car.sort_values('Data_Mudanca')
-    data_inicio = df_fin['Data'].min()
-    if df_car.empty or data_inicio < df_car['Data_Mudanca'].min():
-        classe_inicial = {'Data_Mudanca': data_inicio, 'Classe': 'A'}
-        df_car = pd.concat([pd.DataFrame([classe_inicial]), df_car], ignore_index=True)
-        df_car = df_car.sort_values('Data_Mudanca')
+    if df_car.empty:
+        df_car = pd.DataFrame([{'Data_Mudanca': df_fin['Data'].min(), 'Classe': 'A'}])
+    else:
+        primeira_data = df_fin['Data'].min()
+        if df_car['Data_Mudanca'].min() > primeira_data:
+            df_car = pd.concat([pd.DataFrame([{'Data_Mudanca': primeira_data, 'Classe': 'A'}]), df_car], ignore_index=True)
     df_fin = df_fin.groupby('Data', as_index=False).agg({'Valor_Pago': 'sum'})
     df = pd.merge_asof(
         df_fin.sort_values('Data'),
@@ -117,53 +118,6 @@ def calcular(df_fin, df_car, base):
     df['Diferenca'] = df['Valor_Devido'] - df['Valor_Pago']
     df['Diferenca_Final'] = df['Diferenca'].apply(lambda x: x if x > 0 else 0)
     return df
-
-class PDF(FPDF):
-    def header(self):
-        self.set_font('Arial','B',14)
-        self.cell(0,10,'MEMÓRIA DE CÁLCULO ATUALIZADA',0,1,'C')
-        self.ln(5)
-        self.line(10, 25, 200, 25)
-
-    def footer(self):
-        self.set_y(-15)
-        self.set_font('Arial','I',8)
-        data = datetime.datetime.now().strftime('%d/%m/%Y')
-        self.cell(0,10,f'Documento gerado eletronicamente em {data} para fins processuais.',0,0,'C')
-
-def gerar_pdf(df, nome, mat, total):
-    p = PDF()
-    p.add_page()
-    p.set_font('Arial', '', 10)
-    p.cell(0, 6, f"Servidor: {nome} | Matrícula: {mat}", 0, 1)
-    p.ln()
-    p.set_fill_color(220,255,220)
-    p.set_font('Arial','B',12)
-    p.cell(0,10,f"TOTAL DEVIDO: {fmt_br(total)}",1,1,'C',1)
-    p.ln()
-    p.set_font('Arial','B',9)
-    w = [30,20,35,35,35]
-    h = ['Data','Classe','Pago','Devido','Diferença']
-    for i,x in enumerate(h): p.cell(w[i],7,x,1,0,'C')
-    p.ln()
-    p.set_font('Arial','',9)
-    for _,r in df.iterrows():
-        p.cell(w[0],6,r['Data'].strftime('%m/%Y'),1,0,'C')
-        p.cell(w[1],6,str(r['Classe']),1,0,'C')
-        p.cell(w[2],6,fmt_br(r['Valor_Pago']),1,0,'R')
-        p.cell(w[3],6,fmt_br(r['Valor_Devido']),1,0,'R')
-        p.cell(w[4],6,fmt_br(r['Diferenca_Final']),1,0,'R')
-        p.ln()
-    return p.output(dest='S').encode('latin-1','ignore')
-
-def gerar_txt_projefweb(df):
-    s = io.StringIO()
-    for _,r in df.iterrows():
-        if r["Diferenca_Final"] > 0.01:
-            data_fmt = r["Data"].strftime("%m-%Y")
-            valor_fmt = fmt_br(r["Diferenca_Final"])
-            s.write(f"{data_fmt}\t{valor_fmt}\n")
-    return s.getvalue().encode("utf-8")
 
 # Interface
 st.title("⚖️ Sistema de Cálculo PC/AL")
@@ -200,7 +154,3 @@ if executar and fin and car:
         st.markdown(f"### Total Devido: {fmt_br(total)}")
 
         st.dataframe(res)
-
-        colpdf, coltxt = st.columns(2)
-        colpdf.download_button("📄 Baixar Laudo PDF", gerar_pdf(res, nome, mat, total), "laudo.pdf", "application/pdf")
-        coltxt.download_button("📑 Baixar Projefweb TXT", gerar_txt_projefweb(res), "projefweb.txt", "text/plain")
