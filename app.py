@@ -8,7 +8,6 @@ import io
 import re
 import datetime
 
-# ========== CONFIGURAÇÃO DA PÁGINA ==========
 st.set_page_config(page_title="Cálculo PC/AL", page_icon="⚖️", layout="wide")
 
 # ========== FUNÇÕES AUXILIARES ==========
@@ -64,7 +63,7 @@ def ler_financeiro(file):
                 })
     df = pd.DataFrame(dados)
     if not df.empty:
-        return df.groupby(["Data", "Tipo"]).sum().reset_index().sort_values("Data")
+        return df.groupby(["Data"]).sum().reset_index().sort_values("Data")
     return pd.DataFrame()
 
 def ler_cadastral(arquivos):
@@ -202,8 +201,9 @@ if executar:
             st.dataframe(df_calc)
 
             colpdf, coltxt = st.columns(2)
+
             pdf_bytes = gerar_pdf_juridico(df_calc)
             txt_bytes = gerar_txt_projefweb(df_calc)
 
             colpdf.download_button("📄 Baixar Laudo PDF", pdf_bytes, "laudo.pdf", "application/pdf")
-coltxt.download_button("📑 Baixar Projefweb TXT", txt_bytes, "projefweb.txt", "text/plain")
+            coltxt.download_button("📑 Baixar Projefweb TXT", txt_bytes, "projefweb.txt", "text/plain")
