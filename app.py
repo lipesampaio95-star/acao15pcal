@@ -70,7 +70,10 @@ def ler_financeiro(file):
                 data = pd.to_datetime(f"{ano_detectado}-{mes:02d}-01")
                 dados.append({"Data": data, "Valor_Pago": valor})
 
-    return pd.DataFrame(dados)
+    df = pd.DataFrame(dados)
+    if not df.empty:
+        df = df.groupby("Data", as_index=False).agg({"Valor_Pago": "sum"})
+    return df
 
 def ler_carreira(arquivos):
     historico = []
@@ -92,8 +95,9 @@ def ler_carreira(arquivos):
 
 def calcular_diferencas(fin, car, base):
     mapa = {'A':0, 'B':1, 'C':2, 'D':3, 'E':4, 'F':5, 'G':6}
-    df = pd.merge_asof(fin.sort_values("Data"), car.sort_values("Data_Mudanca"),
-                       left_on="Data", right_on="Data_Mudanca", direction="backward")
+    car = car.sort_values("Data_Mudanca")
+    df = pd.merge_asof(fin.sort_values("Data"), car, left_on="Data", right_on="Data_Mudanca", direction="backward")
+    df["Classe"] = df["Classe"].fillna("A")
     df["Indice"] = df["Classe"].map(mapa).fillna(0)
     df["Valor_Devido"] = base * (1.15 ** df["Indice"])
     df["Diferenca"] = df["Valor_Devido"] - df["Valor_Pago"]
@@ -157,7 +161,7 @@ def gerar_txt_projefweb(df):
     return s.getvalue().encode("utf-8")
 
 # ====================== INTERFACE STREAMLIT ======================
-st.title("⚖️ Cálculo Jurídico PC/AL com OCR")
+st.title("⚖️ Cálculo Jurídico PC/AL com Cronologia de Carreira")
 
 with st.sidebar:
     fin = st.file_uploader("Ficha Financeira (PDF)", type=["pdf"])
