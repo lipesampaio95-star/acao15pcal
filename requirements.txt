@@ -6,6 +6,3 @@ pypdf
 pdfplumber
 xlsxwriter
 openpyxl
-python-docx
-pytesseract
-Pillow
