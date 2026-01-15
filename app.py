@@ -5,21 +5,15 @@ from fpdf import FPDF
 from pypdf import PdfReader
 import pdfplumber
 import pytesseract
-import fitz  # PyMuPDF
+import fitz
 import io
 import re
 import datetime
 
 st.set_page_config(page_title="Cálculo PC/AL", layout="wide")
 
-# ===================== #
-# Utilitários de Layout #
-# ===================== #
 def fmt_br(v): return f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
-# ======================= #
-# Funções de Extração PDF #
-# ======================= #
 def ocr_pdf(file_bytes):
     linhas = []
     doc = fitz.open(stream=file_bytes, filetype="pdf")
@@ -37,7 +31,7 @@ def extrair_numeros_linha(linha):
         try:
             p = p.replace(".", "").replace(",", ".")
             val = float(p)
-            if val > 0:
+            if 0 < val < 100_000:  # Limite de sanidade
                 valores.append(val)
         except:
             continue
@@ -106,17 +100,12 @@ def ler_cadastral(arquivos):
     df = pd.DataFrame(historico).drop_duplicates().sort_values('Data_Mudanca')
     return df
 
-# ===================== #
-# Cálculo Correto       #
-# ===================== #
 def calcular(df_fin, df_car, base):
     df_car = df_car.sort_values('Data_Mudanca')
 
-    if df_car.empty or df_fin['Data'].min() < df_car['Data_Mudanca'].min():
-        classe_inicial = {
-            'Data_Mudanca': df_fin['Data'].min(),
-            'Classe': 'A'
-        }
+    data_inicio = df_fin['Data'].min()
+    if df_car.empty or data_inicio < df_car['Data_Mudanca'].min():
+        classe_inicial = {'Data_Mudanca': data_inicio, 'Classe': 'A'}
         df_car = pd.concat([pd.DataFrame([classe_inicial]), df_car], ignore_index=True)
         df_car = df_car.sort_values('Data_Mudanca')
 
@@ -133,15 +122,11 @@ def calcular(df_fin, df_car, base):
     mapa = {'A':0, 'B':1, 'C':2, 'D':3, 'E':4, 'F':5, 'G':6}
     df['Indice'] = df['Classe'].map(mapa).fillna(0)
     df['Classe'] = df['Classe'].fillna('A')
-
     df['Valor_Devido'] = base * (1.15 ** df['Indice'])
     df['Diferenca'] = df['Valor_Devido'] - df['Valor_Pago']
     df['Diferenca_Final'] = df['Diferenca'].apply(lambda x: x if x > 0 else 0)
     return df
 
-# ===================== #
-# Exportações PDF e TXT #
-# ===================== #
 class PDF(FPDF):
     def header(self):
         self.set_font('Arial','B',14)
@@ -189,11 +174,8 @@ def gerar_txt_projefweb(df):
             s.write(f"{data_fmt}\t{valor_fmt}\n")
     return s.getvalue().encode("utf-8")
 
-# ================ #
-# Interface Streamlit
-# ================ #
+# Interface
 st.title("⚖️ Sistema de Cálculo PC/AL")
-st.markdown("Faça upload da Ficha Financeira e da Ficha Cadastral para gerar os cálculos judiciais.")
 
 col1, col2 = st.columns(2)
 with col1:
