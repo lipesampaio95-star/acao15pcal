@@ -1,77 +1,52 @@
-# ⚖️ Sistema de Cálculo Jurídico - PC/AL
+# 📊 Sistema de Cálculo de Diferenças de Classe - PC/AL
 
-Este sistema realiza cálculos automáticos de diferenças remuneratórias com base na evolução de classes funcionais da Polícia Civil do Estado de Alagoas. O cálculo é feito com base nas Fichas Financeiras e nas Fichas Cadastrais (Promoções), considerando as transições de classe ao longo do tempo.
+Este sistema automatiza o cálculo de diferenças remuneratórias com base em promoções por classe (15% por nível), utilizando como fonte:
+
+- 📄 **Ficha Financeira** (PDF ou Excel)
+- 🧾 **Ficha Cadastral** (PDFs com promoções e códigos de classe)
 
 ## ✅ Funcionalidades
 
-- 🧾 Leitura automatizada de fichas financeiras (com OCR se necessário)
-- 📈 Cálculo da diferença devida com base na classe vigente mês a mês
-- 🧮 Correção com base no percentual de 15% por classe (Lei Estadual 6.276/01 e 7.602/2014)
-- 📑 Exportação para:
-  - Laudo técnico em PDF
-  - Arquivo TXT compatível com Projefweb
+- Leitura automática dos arquivos via OCR e parsing.
+- Reconhecimento cronológico de promoções.
+- Aplicação correta do fator de 15% entre classes (A até G).
+- Exportação de:
+  - 📄 Laudo Técnico Pericial em PDF
+  - 📊 Planilha Excel formatada
+  - 🧾 Arquivo .TXT compatível com Projefweb
 
-## 📁 Upload de Arquivos
+## 🚀 Como Executar
 
-1. **Ficha Financeira** (PDF)
-2. **Ficha(s) Cadastral(is)** com histórico de promoções (PDFs múltiplos)
-
-> O sistema utiliza OCR para ler PDFs escaneados (imagem), como também analisa texto digital.
-
-## 📦 Instalação
-
-### 1. Clone o repositório:
-
-```bash
-git clone https://github.com/seu-usuario/nome-do-repositorio.git
-cd nome-do-repositorio
-```
-
-### 2. Instale as dependências:
+1. Instale os requisitos:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-> Se estiver em Linux ou Streamlit Cloud, o OCR requer instalação do Tesseract:
+2. Execute o app com Streamlit:
 
 ```bash
-sudo apt update && sudo apt install -y tesseract-ocr libtesseract-dev
+streamlit run app_cronologia_final.py
 ```
 
-## 🚀 Execução local
+## 📂 Uploads
 
-```bash
-streamlit run app_final_cronologia.py
-```
+- Ficha Financeira: PDF, Excel (.xls, .xlsx) ou CSV.
+- Ficha Cadastral: Um ou mais PDFs com histórico de promoções.
 
-## 🛠️ Parâmetros
+## 🛠 Tecnologias
 
-- Valor base da Classe A (padrão: R$ 4.000,00)
-- Nome do servidor
-- Matrícula
-- Upload dos documentos
+- Python + Streamlit
+- FPDF (PDF formal jurídico)
+- pdfplumber + pypdf (OCR/Leitura)
+- Pandas + Plotly
+- XlsxWriter
 
-## 📤 Exportações
+## 📌 Observações
 
-- `laudo.pdf` → relatório detalhado com datas, classes, valores pagos/devidos e diferenças.
-- `projefweb.txt` → padrão de importação para o sistema do Tribunal de Justiça de Alagoas.
+- Classe inicial é considerada "A" caso não haja dados anteriores.
+- É usada a **cronologia real** dos documentos, com transições mensais.
 
-## 🧠 Lógica de Cálculo
+## ⚖️ Exemplo de Aplicação
 
-A cada mês, o sistema:
-
-1. Identifica a classe vigente (com base nas datas de promoção extraídas da ficha cadastral)
-2. Calcula o valor devido aplicando +15% por classe a partir da Classe A
-3. Subtrai do valor efetivamente pago (extraído da ficha financeira)
-4. Registra a diferença devida se for positiva
-
-## 📌 Requisitos técnicos
-
-- Python 3.8+
-- Tesseract OCR (recomendado)
-- Libs do requirements.txt
-
----
-
-© Desenvolvido para cálculos judiciais com precisão e fé pública.
+> Usado para gerar laudos técnicos de diferenças salariais de servidores públicos estaduais com base na evolução funcional.
