@@ -148,8 +148,7 @@ def gerar_txt_projefweb(df):
         if r["Diferenca_Final"] > 0.01:
             data_fmt = r["Data"].strftime("%m-%Y")
             valor_fmt = fmt_br(r["Diferenca_Final"])
-            s.write(f"{data_fmt}	{valor_fmt}
-")
+            s.write(f"{data_fmt}\t{valor_fmt}\n")
     return s.getvalue().encode("utf-8")
 
 # ====================== INTERFACE STREAMLIT ======================
