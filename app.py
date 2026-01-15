@@ -31,7 +31,7 @@ def extrair_numeros_linha(linha):
         try:
             p = p.replace(".", "").replace(",", ".")
             val = float(p)
-            if 0 < val < 100_000:  # Limite de sanidade
+            if 0 < val < 100_000:
                 valores.append(val)
         except:
             continue
@@ -66,51 +66,50 @@ def ler_financeiro(file):
 
 def ler_cadastral(arquivos):
     historico = []
-    reg_cod = r'(PCE[A-Z]\d+|AGP[A-Z0-9]+|NV\d+.*?[A-Z]40)'
+    reg_cod = r"(PCE[A-Z]\d+|AGP[A-Z0-9]+|NV\d+.*?[A-Z]40)"
     for arq in arquivos:
         try:
             reader = PdfReader(arq)
             for page in reader.pages:
                 txt = page.extract_text() or ""
-                dt_match = re.search(r'Data Promoção\s*(\d{2}/\d{2}/\d{4})', txt)
-                dt_ref = dt_match.group(1) if dt_match else None
-                if not dt_ref:
-                    dts = re.findall(r'(\d{2}/\d{2}/\d{4})', txt)
-                    if dts: dt_ref = dts[0]
-                cods = re.findall(reg_cod, txt)
-                if dt_ref and cods:
-                    for c in cods:
-                        cls = None
-                        c_up = c.upper()
-                        m1 = re.search(r'([A-G])40', c_up)
-                        if m1: cls = m1.group(1)
-                        else:
-                            m2 = re.search(r'PCE([A-G])', c_up)
-                            if m2: cls = m2.group(1)
-                        if cls:
-                            historico.append({
-                                'Data_Mudanca': pd.to_datetime(dt_ref, dayfirst=True),
-                                'Classe': cls
-                            })
-                            break
-        except:
-            pass
+                linhas = txt.splitlines()
+                data_pg = None
+                classe_pg = None
+                for linha in linhas:
+                    match_dt = re.search(r"Data Promo[çc][aã]o\s*[-:]?\s*(\d{2}/\d{2}/\d{4})", linha, flags=re.IGNORECASE)
+                    if match_dt:
+                        try:
+                            data_pg = pd.to_datetime(match_dt.group(1), dayfirst=True)
+                        except:
+                            continue
+                    cods = re.findall(reg_cod, linha)
+                    for cod in cods:
+                        cod = cod.upper()
+                        m = re.search(r"([A-G])40", cod)
+                        if m:
+                            classe_pg = m.group(1)
+                    if data_pg and classe_pg:
+                        historico.append({'Data_Mudanca': data_pg, 'Classe': classe_pg})
+                        data_pg = None
+                        classe_pg = None
+        except Exception as e:
+            print("Erro ao ler ficha:", e)
+
     if not historico:
         return pd.DataFrame(columns=['Data_Mudanca', 'Classe'])
-    df = pd.DataFrame(historico).drop_duplicates().sort_values('Data_Mudanca')
+
+    df = pd.DataFrame(historico)
+    df = df.drop_duplicates().sort_values('Data_Mudanca').reset_index(drop=True)
     return df
 
 def calcular(df_fin, df_car, base):
     df_car = df_car.sort_values('Data_Mudanca')
-
     data_inicio = df_fin['Data'].min()
     if df_car.empty or data_inicio < df_car['Data_Mudanca'].min():
         classe_inicial = {'Data_Mudanca': data_inicio, 'Classe': 'A'}
         df_car = pd.concat([pd.DataFrame([classe_inicial]), df_car], ignore_index=True)
         df_car = df_car.sort_values('Data_Mudanca')
-
     df_fin = df_fin.groupby('Data', as_index=False).agg({'Valor_Pago': 'sum'})
-
     df = pd.merge_asof(
         df_fin.sort_values('Data'),
         df_car.sort_values('Data_Mudanca'),
@@ -118,7 +117,6 @@ def calcular(df_fin, df_car, base):
         right_on='Data_Mudanca',
         direction='backward'
     )
-
     mapa = {'A':0, 'B':1, 'C':2, 'D':3, 'E':4, 'F':5, 'G':6}
     df['Indice'] = df['Classe'].map(mapa).fillna(0)
     df['Classe'] = df['Classe'].fillna('A')
