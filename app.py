@@ -5,41 +5,46 @@ from fpdf import FPDF
 from pypdf import PdfReader
 import pdfplumber
 import pytesseract
-from PIL import Image
+import fitz  # PyMuPDF
 import io
 import re
-import fitz  # PyMuPDF
-from datetime import datetime
+import datetime
 
-st.set_page_config(page_title="Cálculo PC/AL", page_icon="⚖️", layout="wide")
+st.set_page_config(page_title="Cálculo PC/AL", layout="wide")
 
-def limpar_valor(txt):
-    if isinstance(txt, (int, float)):
-        return float(txt)
-    if not txt:
-        return 0.0
-    t = str(txt).replace('R$', '').replace('.', '').replace(',', '.').strip()
-    try:
-        return float(t)
-    except:
-        return 0.0
+# ===================== #
+# Utilitários de Layout #
+# ===================== #
+def fmt_br(v): return f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+# ======================= #
+# Funções de Extração PDF #
+# ======================= #
+def ocr_pdf(file_bytes):
+    linhas = []
+    doc = fitz.open(stream=file_bytes, filetype="pdf")
+    for page in doc:
+        pix = page.get_pixmap(dpi=300)
+        img = pix.tobytes("png")
+        texto = pytesseract.image_to_string(img, lang="por")
+        linhas.extend(texto.splitlines())
+    return linhas
 
 def extrair_numeros_linha(linha):
-    return [limpar_valor(val) for val in re.findall(r"\d+[.,]\d{2}", linha)]
-
-def ocr_pdf(pdf_bytes):
-    texto_total = []
-    with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
-        for page in doc:
-            pix = page.get_pixmap(dpi=300)
-            img = Image.open(io.BytesIO(pix.tobytes("png")))
-            txt = pytesseract.image_to_string(img, lang="por")
-            texto_total += txt.splitlines()
-    return texto_total
+    partes = re.findall(r"[\d\.,]+", linha)
+    valores = []
+    for p in partes:
+        try:
+            p = p.replace(".", "").replace(",", ".")
+            val = float(p)
+            if val > 0:
+                valores.append(val)
+        except:
+            continue
+    return valores
 
 def ler_financeiro(file):
     linhas = []
-
     try:
         with pdfplumber.open(file) as pdf:
             for page in pdf.pages:
@@ -47,154 +52,182 @@ def ler_financeiro(file):
                 if txt:
                     linhas.extend(txt.splitlines())
     except:
-        linhas = []
-
-    if not linhas:
         linhas = ocr_pdf(file.read())
 
     dados = []
     ano_detectado = None
-
     for linha in linhas:
         if not ano_detectado:
-            match_ano = re.search(r'(20\d{2})', linha)
-            if match_ano:
-                ano_detectado = int(match_ano.group(1))
-
+            match = re.search(r"(20\d{2})", linha)
+            if match:
+                ano_detectado = int(match.group(1))
         numeros = extrair_numeros_linha(linha)
         numeros_salario = [n for n in numeros if n > 1200]
-
         if len(numeros_salario) >= 3 and ano_detectado:
             for i, valor in enumerate(numeros_salario[:12]):
                 mes = i + 1
                 data = pd.to_datetime(f"{ano_detectado}-{mes:02d}-01")
                 dados.append({"Data": data, "Valor_Pago": valor})
+    return pd.DataFrame(dados)
 
-    df = pd.DataFrame(dados)
-    if not df.empty:
-        df = df.groupby("Data", as_index=False).agg({"Valor_Pago": "sum"})
-    return df
-
-def ler_carreira(arquivos):
+def ler_cadastral(arquivos):
     historico = []
+    reg_cod = r'(PCE[A-Z]\d+|AGP[A-Z0-9]+|NV\d+.*?[A-Z]40)'
     for arq in arquivos:
-        reader = PdfReader(arq)
-        for page in reader.pages:
-            txt = page.extract_text()
-            if not txt:
-                continue
-            datas = re.findall(r'(\d{2}/\d{2}/\d{4})', txt)
-            niveis = re.findall(r'(PCE[A-Z]\d+|AGP[A-Z0-9-]+|NV\d+[A-Z0-9-]*)', txt)
-            for dt, cod in zip(datas, niveis):
-                dt_obj = pd.to_datetime(dt, dayfirst=True)
-                classe_match = re.search(r'([A-G])40', cod.upper())
-                if classe_match:
-                    historico.append({'Data_Mudanca': dt_obj, 'Classe': classe_match.group(1)})
-    df = pd.DataFrame(historico).drop_duplicates().sort_values("Data_Mudanca")
+        try:
+            reader = PdfReader(arq)
+            for page in reader.pages:
+                txt = page.extract_text() or ""
+                dt_match = re.search(r'Data Promoção\s*(\d{2}/\d{2}/\d{4})', txt)
+                dt_ref = dt_match.group(1) if dt_match else None
+                if not dt_ref:
+                    dts = re.findall(r'(\d{2}/\d{2}/\d{4})', txt)
+                    if dts: dt_ref = dts[0]
+                cods = re.findall(reg_cod, txt)
+                if dt_ref and cods:
+                    for c in cods:
+                        cls = None
+                        c_up = c.upper()
+                        m1 = re.search(r'([A-G])40', c_up)
+                        if m1: cls = m1.group(1)
+                        else:
+                            m2 = re.search(r'PCE([A-G])', c_up)
+                            if m2: cls = m2.group(1)
+                        if cls:
+                            historico.append({
+                                'Data_Mudanca': pd.to_datetime(dt_ref, dayfirst=True),
+                                'Classe': cls
+                            })
+                            break
+        except:
+            pass
+    if not historico:
+        return pd.DataFrame(columns=['Data_Mudanca', 'Classe'])
+    df = pd.DataFrame(historico).drop_duplicates().sort_values('Data_Mudanca')
     return df
 
-def calcular_diferencas(fin, car, base):
+# ===================== #
+# Cálculo Correto       #
+# ===================== #
+def calcular(df_fin, df_car, base):
+    df_car = df_car.sort_values('Data_Mudanca')
+
+    if df_car.empty or df_fin['Data'].min() < df_car['Data_Mudanca'].min():
+        classe_inicial = {
+            'Data_Mudanca': df_fin['Data'].min(),
+            'Classe': 'A'
+        }
+        df_car = pd.concat([pd.DataFrame([classe_inicial]), df_car], ignore_index=True)
+        df_car = df_car.sort_values('Data_Mudanca')
+
+    df_fin = df_fin.groupby('Data', as_index=False).agg({'Valor_Pago': 'sum'})
+
+    df = pd.merge_asof(
+        df_fin.sort_values('Data'),
+        df_car.sort_values('Data_Mudanca'),
+        left_on='Data',
+        right_on='Data_Mudanca',
+        direction='backward'
+    )
+
     mapa = {'A':0, 'B':1, 'C':2, 'D':3, 'E':4, 'F':5, 'G':6}
-    car = car.sort_values("Data_Mudanca")
-    df = pd.merge_asof(fin.sort_values("Data"), car, left_on="Data", right_on="Data_Mudanca", direction="backward")
-    df["Classe"] = df["Classe"].fillna("A")
-    df["Indice"] = df["Classe"].map(mapa).fillna(0)
-    df["Valor_Devido"] = base * (1.15 ** df["Indice"])
-    df["Diferenca"] = df["Valor_Devido"] - df["Valor_Pago"]
-    df["Diferenca_Final"] = df["Diferenca"].apply(lambda x: x if x > 0 else 0)
+    df['Indice'] = df['Classe'].map(mapa).fillna(0)
+    df['Classe'] = df['Classe'].fillna('A')
+
+    df['Valor_Devido'] = base * (1.15 ** df['Indice'])
+    df['Diferenca'] = df['Valor_Devido'] - df['Valor_Pago']
+    df['Diferenca_Final'] = df['Diferenca'].apply(lambda x: x if x > 0 else 0)
     return df
 
-def fmt_br(v): return f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-
+# ===================== #
+# Exportações PDF e TXT #
+# ===================== #
 class PDF(FPDF):
     def header(self):
-        self.set_font('Times', 'B', 14)
-        self.cell(0, 10, "LAUDO TÉCNICO PERICIAL", ln=True, align='C')
+        self.set_font('Arial','B',14)
+        self.cell(0,10,'MEMÓRIA DE CÁLCULO ATUALIZADA',0,1,'C')
         self.ln(5)
+        self.line(10, 25, 200, 25)
+
     def footer(self):
         self.set_y(-15)
-        self.set_font('Arial', 'I', 8)
-        self.cell(0, 10, f"Gerado em {datetime.now().strftime('%d/%m/%Y')} - Pág. {self.page_no()}", align='C')
+        self.set_font('Arial','I',8)
+        data = datetime.datetime.now().strftime('%d/%m/%Y')
+        self.cell(0,10,f'Documento gerado eletronicamente em {data} para fins processuais.',0,0,'C')
 
-def gerar_pdf(df, nome, matricula, total):
+def gerar_pdf(df, nome, mat, total):
     p = PDF()
     p.add_page()
-    p.set_font('Times', '', 12)
-    p.cell(0, 10, f"Autor: {nome}", ln=True)
-    p.cell(0, 10, f"Matrícula: {matricula}", ln=True)
-    p.cell(0, 10, f"Réu: Estado de Alagoas", ln=True)
-    p.ln(10)
-
-    p.set_font('Times', 'B', 12)
-    p.set_fill_color(212, 239, 223)
-    p.cell(140, 10, "TOTAL DEVIDO", 1, 0, 'L', 1)
-    p.cell(50, 10, fmt_br(total), 1, 1, 'R', 1)
-    p.ln(5)
-
-    headers = ['Mês/Ano', 'Classe', 'Pago', 'Devido', 'Diferença']
-    widths = [30, 20, 40, 40, 40]
-    p.set_font('Times', 'B', 10)
-    for i, h in enumerate(headers):
-        p.cell(widths[i], 8, h, 1, 0, 'C')
+    p.set_font('Arial', '', 10)
+    p.cell(0, 6, f"Servidor: {nome} | Matrícula: {mat}", 0, 1)
     p.ln()
-    p.set_font('Times', '', 10)
-    for _, r in df.iterrows():
-        p.cell(widths[0], 8, r["Data"].strftime('%m/%Y'), 1)
-        p.cell(widths[1], 8, str(r["Classe"]), 1)
-        p.cell(widths[2], 8, fmt_br(r["Valor_Pago"]), 1, 0, 'R')
-        p.cell(widths[3], 8, fmt_br(r["Valor_Devido"]), 1, 0, 'R')
-        p.cell(widths[4], 8, fmt_br(r["Diferenca_Final"]), 1, 0, 'R')
+    p.set_fill_color(220,255,220)
+    p.set_font('Arial','B',12)
+    p.cell(0,10,f"TOTAL DEVIDO: {fmt_br(total)}",1,1,'C',1)
+    p.ln()
+    p.set_font('Arial','B',9)
+    w = [30,20,35,35,35]
+    h = ['Data','Classe','Pago','Devido','Diferença']
+    for i,x in enumerate(h): p.cell(w[i],7,x,1,0,'C')
+    p.ln()
+    p.set_font('Arial','',9)
+    for _,r in df.iterrows():
+        p.cell(w[0],6,r['Data'].strftime('%m/%Y'),1,0,'C')
+        p.cell(w[1],6,str(r['Classe']),1,0,'C')
+        p.cell(w[2],6,fmt_br(r['Valor_Pago']),1,0,'R')
+        p.cell(w[3],6,fmt_br(r['Valor_Devido']),1,0,'R')
+        p.cell(w[4],6,fmt_br(r['Diferenca_Final']),1,0,'R')
         p.ln()
-
-    p.ln(10)
-    p.cell(0, 10, "__________________________", ln=True)
-    p.cell(0, 6, "Assinatura do advogado/perito")
-    return p.output(dest='S').encode("latin-1")
+    return p.output(dest='S').encode('latin-1','ignore')
 
 def gerar_txt_projefweb(df):
     s = io.StringIO()
-    for _, r in df.iterrows():
+    for _,r in df.iterrows():
         if r["Diferenca_Final"] > 0.01:
             data_fmt = r["Data"].strftime("%m-%Y")
             valor_fmt = fmt_br(r["Diferenca_Final"])
             s.write(f"{data_fmt}\t{valor_fmt}\n")
     return s.getvalue().encode("utf-8")
 
-# ====================== INTERFACE STREAMLIT ======================
-st.title("⚖️ Cálculo Jurídico PC/AL com Cronologia de Carreira")
+# ================ #
+# Interface Streamlit
+# ================ #
+st.title("⚖️ Sistema de Cálculo PC/AL")
+st.markdown("Faça upload da Ficha Financeira e da Ficha Cadastral para gerar os cálculos judiciais.")
 
-with st.sidebar:
-    fin = st.file_uploader("Ficha Financeira (PDF)", type=["pdf"])
-    cars = st.file_uploader("Fichas Cadastrais (PDFs)", type=["pdf"], accept_multiple_files=True)
-    base = st.number_input("Valor Base Classe A", value=4000.00)
-    nome = st.text_input("Nome", "Ironildo da Silva Costa")
-    mat = st.text_input("Matrícula", "0065998-3")
-    btn1, btn2 = st.columns(2)
-    run = btn1.button("🚀 Executar")
-    if btn2.button("🗑️ Limpar"):
-        st.session_state.clear()
-        st.experimental_rerun()
+col1, col2 = st.columns(2)
+with col1:
+    base = st.number_input("Valor Base da Classe A (R$)", value=4000.00, step=100.0)
+    nome = st.text_input("Nome do Servidor", "Servidor Exemplo")
+    mat = st.text_input("Matrícula", "000000-0")
+with col2:
+    fin = st.file_uploader("📂 Ficha Financeira (PDF)", type=["pdf"])
+    car = st.file_uploader("📂 Fichas Cadastrais (PDFs)", type=["pdf"], accept_multiple_files=True)
 
-if run and fin and cars:
+colbtn1, colbtn2 = st.columns(2)
+executar = colbtn1.button("🚀 Executar Cálculo")
+limpar = colbtn2.button("🗑️ Limpar Tudo")
+
+if limpar:
+    st.session_state.clear()
+    st.experimental_rerun()
+
+if executar and fin and car:
+    st.info("📥 Processando arquivos...")
     df_fin = ler_financeiro(fin)
-    df_car = ler_carreira(cars)
-    if df_fin.empty:
-        st.error("⚠️ Não foi possível ler a Ficha Financeira.")
-    elif df_car.empty:
-        st.error("⚠️ Nenhuma promoção foi detectada na(s) Ficha(s) Cadastral(is).")
+    df_car = ler_cadastral(car)
+
+    if df_fin.empty or df_car.empty:
+        st.error("⚠️ Dados insuficientes. Verifique os PDFs.")
     else:
-        df_calc = calcular_diferencas(df_fin, df_car, base)
-        total = df_calc["Diferenca_Final"].sum()
+        res = calcular(df_fin, df_car, base)
+        total = res['Diferenca_Final'].sum()
 
-        st.success(f"Cálculo pronto. Total devido: {fmt_br(total)}")
-        st.dataframe(df_calc)
+        st.success("✅ Cálculo concluído!")
+        st.markdown(f"### Total Devido: {fmt_br(total)}")
 
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=df_calc["Data"], y=df_calc["Valor_Pago"], name="Pago"))
-        fig.add_trace(go.Scatter(x=df_calc["Data"], y=df_calc["Valor_Devido"], name="Devido"))
-        fig.update_layout(title="Pago vs Devido", height=400)
-        st.plotly_chart(fig, use_container_width=True)
+        st.dataframe(res)
 
         colpdf, coltxt = st.columns(2)
-        colpdf.download_button("📄 Baixar PDF", gerar_pdf(df_calc, nome, mat, total), "laudo.pdf", "application/pdf")
-        coltxt.download_button("📑 Baixar TXT Projefweb", gerar_txt_projefweb(df_calc), "projefweb.txt", "text/plain")
+        colpdf.download_button("📄 Baixar Laudo PDF", gerar_pdf(res, nome, mat, total), "laudo.pdf", "application/pdf")
+        coltxt.download_button("📑 Baixar Projefweb TXT", gerar_txt_projefweb(res), "projefweb.txt", "text/plain")
