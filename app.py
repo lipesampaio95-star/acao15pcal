@@ -1,3 +1,5 @@
+# Arquivo: app_cronologia_final_corrigido.py
+
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
@@ -73,25 +75,16 @@ def ler_cadastral(arquivos):
             for page in reader.pages:
                 txt = page.extract_text() or ""
                 linhas = txt.splitlines()
-                data_pg = None
-                classe_pg = None
                 for linha in linhas:
-                    match_dt = re.search(r"Data Promo[çc][aã]o\s*[-:]?\s*(\d{2}/\d{2}/\d{4})", linha, flags=re.IGNORECASE)
-                    if match_dt:
-                        try:
-                            data_pg = pd.to_datetime(match_dt.group(1), dayfirst=True)
-                        except:
-                            continue
-                    cods = re.findall(reg_cod, linha)
-                    for cod in cods:
-                        cod = cod.upper()
+                    match_data = re.search(r"(\d{2}/\d{2}/\d{4})", linha)
+                    match_cod = re.search(reg_cod, linha)
+                    if match_data and match_cod:
+                        data_pg = pd.to_datetime(match_data.group(1), dayfirst=True)
+                        cod = match_cod.group(1).upper()
                         m = re.search(r"([A-G])40", cod)
                         if m:
-                            classe_pg = m.group(1)
-                    if data_pg and classe_pg:
-                        historico.append({'Data_Mudanca': data_pg, 'Classe': classe_pg})
-                        data_pg = None
-                        classe_pg = None
+                            classe = m.group(1)
+                            historico.append({'Data_Mudanca': data_pg, 'Classe': classe})
         except Exception as e:
             print("Erro ao ler ficha:", e)
 
