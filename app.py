@@ -8,14 +8,15 @@ import pdfplumber
 import io
 import re
 
-# --- CONFIGURAÇÃO DA PÁGINA ---
+# ==============================================================================
+# 1. CONFIGURAÇÃO E CSS (PRESERVADO RIGOROSAMENTE)
+# ==============================================================================
 st.set_page_config(
-    page_title="Cálculo PC/AL - Dashboard", 
+    page_title="Cálculo PC/AL", 
     page_icon="⚖️", 
     layout="wide"
 )
 
-# --- DESIGN (CSS) ---
 st.markdown("""
 <style>
     /* Cartões de Métricas */
@@ -70,100 +71,130 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==============================================================================
-# 1. ROBÔS DE LEITURA (BACKEND)
+# 2. FUNÇÕES DE EXTRAÇÃO (BACKEND)
 # ==============================================================================
 
-def limpar_moeda(valor):
-    """Converte 'R$ 5.000,00' para float 5000.0"""
-    if isinstance(valor, (int, float)): return float(valor)
-    if not valor: return 0.0
-    s = str(valor).replace('R$', '').replace(' ', '').replace('.', '').replace(',', '.')
-    try: return float(s)
-    except: return 0.0
-
-def ler_financeiro_pdf_horizontal(arquivo):
-    """Lê PDF onde meses estão nas colunas (Janeiro, Fevereiro...)"""
-    dados = []
-    mapa_meses = {
-        'JANEIRO': 1, 'FEVEREIRO': 2, 'MARÇO': 3, 'ABRIL': 4, 'MAIO': 5, 'JUNHO': 6,
-        'JULHO': 7, 'AGOSTO': 8, 'SETEMBRO': 9, 'OUTUBRO': 10, 'NOVEMBRO': 11, 'DEZEMBRO': 12
-    }
-
-    with pdfplumber.open(arquivo) as pdf:
-        for page in pdf.pages:
-            texto = page.extract_text() or ""
-            # Achar Ano
-            match_ano = re.search(r'(?:Ano Comp|Exercício|Ano)[:\s]*(\d{4})', texto, re.IGNORECASE)
-            if not match_ano: match_ano = re.search(r'\b(20\d{2})\b', texto[:300]) # Fallback
-            
-            if not match_ano: continue
-            ano_pag = int(match_ano.group(1))
-
-            tables = page.extract_tables()
-            for table in tables:
-                header_idx = -1
-                cols_indices = {}
-                
-                # Achar linha de meses
-                for i, row in enumerate(table):
-                    row_str = [str(x).upper() if x else "" for x in row]
-                    found = 0
-                    temp_map = {}
-                    for col_i, cell in enumerate(row_str):
-                        for nome_mes, num_mes in mapa_meses.items():
-                            if nome_mes in cell:
-                                temp_map[col_i] = num_mes
-                                found += 1
-                                break
-                    if found >= 3:
-                        header_idx = i
-                        cols_indices = temp_map
-                        break
-                
-                # Extrair dados
-                if header_idx != -1:
-                    for row in table[header_idx+1:]:
-                        row = [str(x) if x else "" for x in row]
-                        for col_i, num_mes in cols_indices.items():
-                            if col_i < len(row):
-                                val = limpar_moeda(row[col_i])
-                                if val > 1200: # Filtro Subsídio
-                                    dados.append({
-                                        'Data': pd.to_datetime(f"{ano_pag}-{num_mes:02d}-01"),
-                                        'Valor_Pago': val
-                                    })
+def limpar_valor(texto):
+    """
+    Converte strings sujas (R$ 1.000,00 ou 1000.00) em float puro.
+    """
+    if isinstance(texto, (int, float)): return float(texto)
+    if not texto: return 0.0
     
-    if dados:
-        df = pd.DataFrame(dados)
-        df = df.groupby('Data')['Valor_Pago'].max().reset_index() # Remove duplicatas pegando o maior valor
-        return df.sort_values('Data')
-    return pd.DataFrame()
+    # Remove aspas, R$ e espaços
+    t = str(texto).replace('"', '').replace("'", "").replace('R$', '').strip()
+    
+    # Lógica para detectar formato BR (1.000,00) vs US (1,000.00)
+    try:
+        if ',' in t and '.' in t:
+            if t.rfind(',') > t.rfind('.'): # Formato BR
+                t = t.replace('.', '').replace(',', '.')
+            else: # Formato US
+                t = t.replace(',', '')
+        elif ',' in t: # 1000,00
+            t = t.replace(',', '.')
+        return float(t)
+    except:
+        return 0.0
+
+def extrair_numeros_linha(linha_texto):
+    """
+    Pega uma linha de texto e extrai todos os números válidos encontrados nela.
+    """
+    # 1. Tentar quebrar por CSV (aspas e vírgula)
+    if '"' in linha_texto and ',' in linha_texto:
+        partes = linha_texto.split('","')
+        partes = [p.replace('"', '') for p in partes]
+    else:
+        # 2. Quebrar por espaços ou tabulações
+        partes = linha_texto.replace(',', '.').split()
+    
+    valores = []
+    for p in partes:
+        val = limpar_valor(p)
+        if val > 0: valores.append(val)
+    return valores
 
 def ler_financeiro_universal(arquivo):
-    """Direciona para o leitor correto (PDF ou Excel)"""
-    if arquivo.name.endswith('.pdf'):
-        return ler_financeiro_pdf_horizontal(arquivo)
-    else:
-        # Excel ou CSV
+    """
+    Lê PDF, Excel ou CSV transformando tudo em 'linhas de texto'.
+    Procura 'Subsídio' e 'Ano' independente da formatação.
+    """
+    linhas_totais = []
+
+    # A. IDENTIFICAR TIPO E EXTRAIR TEXTO BRUTO
+    if arquivo.name.lower().endswith('.pdf'):
+        with pdfplumber.open(arquivo) as pdf:
+            for page in pdf.pages:
+                txt = page.extract_text()
+                if txt: linhas_totais.extend(txt.split('\n'))
+                
+    elif arquivo.name.lower().endswith(('.xlsx', '.xls', '.csv')):
         try:
-            if arquivo.name.endswith('.csv'): df = pd.read_csv(arquivo)
-            else: df = pd.read_excel(arquivo)
+            if arquivo.name.lower().endswith('.csv'):
+                df = pd.read_csv(arquivo, header=None, dtype=str)
+            else:
+                df = pd.read_excel(arquivo, header=None, dtype=str)
             
-            # Normalizar colunas
-            cols = [c.lower() for c in df.columns]
-            c_dt = next((c for c in df.columns if 'data' in c.lower()), None)
-            c_vl = next((c for c in df.columns if 'valor' in c.lower() or 'pago' in c.lower()), None)
+            # Converte cada linha da tabela em uma string única
+            for index, row in df.iterrows():
+                # Junta todas as células da linha que não são nulas
+                linha_str = " ".join([str(x) for x in row.values if pd.notna(x) and str(x).strip() != ""])
+                linhas_totais.append(linha_str)
+        except Exception as e:
+            st.error(f"Erro ao ler Excel/CSV: {e}")
+            return pd.DataFrame()
+
+    # B. PROCESSAR AS LINHAS (LÓGICA UNIFICADA)
+    dados = []
+    ano_atual = None
+    
+    for linha in linhas_totais:
+        linha_upper = linha.upper()
+        
+        # 1. Tentar capturar o ANO
+        # Regex flexível para: "Ano: 2016", "Exercício 2016", "2016" solto perto de cabeçalhos
+        match_ano = re.search(r'(?:ANO|EXERCICIO|COMP|REFERENCIA).*?(\d{4})', linha_upper)
+        if match_ano:
+            ano_atual = int(match_ano.group(1))
+        
+        # 2. Capturar SUBSÍDIO
+        # Verifica se é subsídio e NÃO é "Subsídio Alimentação" ou "Transporte" (se houver)
+        if "SUBSIDIO" in linha_upper or "SUBSÍDIO" in linha_upper:
+            if "ALIMENT" in linha_upper: continue
             
-            if c_dt and c_vl:
-                df = df.rename(columns={c_dt: 'Data', c_vl: 'Valor_Pago'})
-                df['Data'] = pd.to_datetime(df['Data'])
-                df['Valor_Pago'] = df['Valor_Pago'].apply(limpar_moeda)
-                return df[['Data', 'Valor_Pago']].dropna().sort_values('Data')
-        except: pass
+            if not ano_atual: continue
+            
+            # Extrai todos os números desta linha
+            numeros = extrair_numeros_linha(linha)
+            
+            # FILTRAGEM CRÍTICA:
+            # O arquivo tem linhas com dias (30, 30...) e linhas com dinheiro (16000.00...)
+            # Pegamos apenas se houver valores > 1200 (Assumindo que salário base PC/AL > 1200)
+            numeros_filtrados = [n for n in numeros if n > 1200]
+            
+            if numeros_filtrados:
+                # Assume que os números encontrados correspondem aos meses sequencialmente encontrados
+                # (Janeiro, Fevereiro...). Se houver 12 números, são os 12 meses.
+                for i, valor in enumerate(numeros_filtrados):
+                    if i < 12: # Limite de segurança meses
+                        mes = i + 1
+                        dados.append({
+                            'Data': pd.to_datetime(f"{ano_atual}-{mes:02d}-01"),
+                            'Valor_Pago': valor
+                        })
+
+    if dados:
+        df = pd.DataFrame(dados)
+        # Agrupa para remover duplicatas e pega o maior valor (caso leia dias e dinheiro, pega dinheiro)
+        df = df.groupby('Data')['Valor_Pago'].max().reset_index()
+        return df.sort_values('Data')
+    
     return pd.DataFrame()
 
 def ler_cadastral(arquivos):
     historico = []
+    # Regex para códigos de classe: PCE... ou AGP... ou NV...A40
     reg_cod = r'(PCE[A-Z]\d+|AGP[A-Z0-9]+|NV\d+.*?[A-Z]40)'
     
     for arq in arquivos:
@@ -171,19 +202,22 @@ def ler_cadastral(arquivos):
             reader = PdfReader(arq)
             for page in reader.pages:
                 txt = page.extract_text() or ""
-                # Data Promoção
+                
+                # Busca Data da Promoção
                 dt_match = re.search(r'Data Promoção\s*(\d{2}/\d{2}/\d{4})', txt)
                 dt_ref = dt_match.group(1) if dt_match else None
                 if not dt_ref:
+                    # Tenta achar qualquer data no formato dd/mm/aaaa se não tiver label explícito
                     dts = re.findall(r'(\d{2}/\d{2}/\d{4})', txt)
                     if dts: dt_ref = dts[0]
                 
+                # Busca Código da Classe
                 cods = re.findall(reg_cod, txt)
                 if dt_ref and cods:
                     for c in cods:
-                        # Extrair letra da classe
                         cls = None
                         c_up = c.upper()
+                        # Extrai a letra da Classe (A, B, C...)
                         m1 = re.search(r'([A-G])40', c_up)
                         if m1: cls = m1.group(1)
                         else:
@@ -198,25 +232,28 @@ def ler_cadastral(arquivos):
     if not historico: return pd.DataFrame(columns=['Data_Mudanca', 'Classe'])
     return pd.DataFrame(historico).drop_duplicates().sort_values('Data_Mudanca')
 
-# ==============================================================================
-# 2. CÁLCULO E EXPORTAÇÃO
-# ==============================================================================
-def calcular(df_f, df_c, base):
-    df = pd.merge_asof(df_f, df_c, left_on='Data', right_on='Data_Mudanca', direction='backward')
+def calcular(df_fin, df_car, base):
+    # Cruzamento de dados (Merge AsOf)
+    df = pd.merge_asof(df_fin, df_car, left_on='Data', right_on='Data_Mudanca', direction='backward')
+    
+    # Mapeamento Classe -> Índice
     mapa = {'A':0, 'B':1, 'C':2, 'D':3, 'E':4, 'F':5, 'G':6}
     df['Indice'] = df['Classe'].map(mapa).fillna(0)
-    df['Classe'] = df['Classe'].fillna('A')
+    df['Classe'] = df['Classe'].fillna('A') # Default se não achar
     
+    # Cálculo
     df['Valor_Devido'] = base * (1.15 ** df['Indice'])
     df['Diferenca'] = df['Valor_Devido'] - df['Valor_Pago']
     df['Diferenca_Final'] = df['Diferenca'].apply(lambda x: x if x > 0 else 0)
+    
     return df
 
+# Utilitários de Exportação
 def fmt_br(v): return f"{v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 class PDF(FPDF):
     def header(self):
-        self.set_font('Arial','B',14); self.cell(0,10,'Relatório de Cálculo Pericial',0,1,'C'); self.ln(5)
+        self.set_font('Arial','B',14); self.cell(0,10,'Relatório de Cálculo PC/AL',0,1,'C'); self.ln(5)
     def footer(self):
         self.set_y(-15); self.set_font('Arial','I',8); self.cell(0,10,f'Pág {self.page_no()}',0,0,'C')
 
@@ -281,7 +318,7 @@ if files_fin and files_car:
                 
                 # 2. Validação
                 erro = ""
-                if df_fin.empty: erro += "- Ficha Financeira vazia ou ilegível.\n"
+                if df_fin.empty: erro += "- Ficha Financeira vazia ou ilegível (Não achei 'Subsídio' > 1200 ou Ano).\n"
                 if df_car.empty: erro += "- Nenhuma promoção encontrada nas Fichas Cadastrais.\n"
                 
                 if not erro:
