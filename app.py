@@ -8,7 +8,7 @@ import io
 import re
 
 # ==============================================================================
-# 1. CONFIGURAÇÃO VISUAL (CSS)
+# 1. CONFIGURAÇÃO VISUAL
 # ==============================================================================
 st.set_page_config(page_title="Cálculo PC/AL", page_icon="⚖️", layout="wide")
 
@@ -46,22 +46,14 @@ st.markdown("""
     font-weight: bold;
     color: #27ae60;
 }
-div.stButton > button:first-child {
-    background-color: #2980b9;
-    color: white;
-    font-size: 18px;
-    border-radius: 8px;
-    width: 100%;
-    padding: 10px 0;
-}
-div.stButton > button:first-child:hover {
-    background-color: #1a5276;
+div.stButton > button {
+    font-size: 18px !important;
 }
 </style>
 """, unsafe_allow_html=True)
 
 # ==============================================================================
-# 2. FUNÇÕES DE EXTRAÇÃO
+# 2. FUNÇÕES AUXILIARES
 # ==============================================================================
 
 def limpar_valor(txt):
@@ -119,21 +111,44 @@ def ler_financeiro_universal(file):
 
 def ler_cadastral(arquivos):
     historico = []
+    regex_codigo = r'(PCE[A-G]|AGPMNE[1-9]?[A-G]40|AGPMNJ[1-9]?[A-G]40|NV\d{5}-AGPMN[A-Z][1-9]?[A-G]40)'
+
     for arq in arquivos:
-        reader = PdfReader(arq)
-        for page in reader.pages:
-            txt = page.extract_text()
-            datas = re.findall(r"(\d{2}/\d{2}/\d{4})", txt)
-            codigos = re.findall(r"AGPMNJ[ABCDEFG]40", txt.upper())
-            if datas and codigos:
-                historico.append({
-                    "Data_Mudanca": pd.to_datetime(datas[0], dayfirst=True),
-                    "Classe": codigos[0][-3]
-                })
+        try:
+            reader = PdfReader(arq)
+            for page in reader.pages:
+                txt = page.extract_text()
+                if not txt:
+                    continue
+                datas = re.findall(r'Data Promo[çc][ãa]o\s*(\d{2}/\d{2}/\d{4})', txt)
+                if not datas:
+                    datas = re.findall(r'(\d{2}/\d{2}/\d{4})', txt)
+                codigos = re.findall(regex_codigo, txt.upper())
+
+                for i in range(min(len(datas), len(codigos))):
+                    data_str = datas[i]
+                    cod = codigos[i].upper()
+                    classe = None
+                    m1 = re.search(r'PCE([A-G])', cod)
+                    m2 = re.search(r'AGPMN[A-Z]\d*([A-G])40', cod)
+                    if m1:
+                        classe = m1.group(1)
+                    elif m2:
+                        classe = m2.group(1)
+
+                    if classe:
+                        historico.append({
+                            'Data_Mudanca': pd.to_datetime(data_str, dayfirst=True),
+                            'Classe': classe
+                        })
+        except:
+            pass
+
     if historico:
-        df = pd.DataFrame(historico).drop_duplicates().sort_values("Data_Mudanca")
+        df = pd.DataFrame(historico).drop_duplicates().sort_values('Data_Mudanca')
         return df
-    return pd.DataFrame(columns=["Data_Mudanca", "Classe"])
+
+    return pd.DataFrame(columns=['Data_Mudanca', 'Classe'])
 
 def calcular(fin, cad, base):
     mapa = {'A':0, 'B':1, 'C':2, 'D':3, 'E':4, 'F':5, 'G':6}
@@ -144,72 +159,50 @@ def calcular(fin, cad, base):
     df["Diferenca_Final"] = df["Diferenca"].apply(lambda x: x if x > 0 else 0)
     return df
 
-# ==============================================================================
-# 3. UTILITÁRIOS
-# ==============================================================================
 def fmt_br(v): return f"{v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
-class PDF(FPDF):
-    def header(self):
-        self.set_font('Arial','B',14)
-        self.cell(0,10,'Relatório de Cálculo PC/AL',0,1,'C')
-        self.ln(5)
-    def footer(self):
-        self.set_y(-15)
-        self.set_font('Arial','I',8)
-        self.cell(0,10,f'Pág {self.page_no()}',0,0,'C')
-
-def gerar_pdf(df, nome, mat, total):
-    p = PDF(); p.add_page(); p.set_font('Arial','',10)
-    p.cell(0,6,f"Servidor: {nome} | Matrícula: {mat}",0,1); p.ln()
-    p.set_fill_color(220,255,220); p.set_font('Arial','B',12)
-    p.cell(0,10,f"TOTAL: R$ {fmt_br(total)}",1,1,'C',1); p.ln()
-    p.set_font('Arial','B',9)
-    for _,r in df.iterrows():
-        p.set_font('Arial','B',9 if r['Diferenca_Final']>0 else 'Arial')
-        p.cell(30,6,r['Data'].strftime('%m/%Y'),1,0,'C')
-        p.cell(20,6,str(r['Classe']),1,0,'C')
-        p.cell(35,6,fmt_br(r['Valor_Pago']),1,0,'R')
-        p.cell(35,6,fmt_br(r['Valor_Devido']),1,0,'R')
-        p.cell(35,6,fmt_br(r['Diferenca_Final']),1,0,'R')
-        p.ln()
-    return p.output(dest='S').encode('latin-1','ignore')
-
 # ==============================================================================
-# 4. INTERFACE STREAMLIT
+# 3. INTERFACE STREAMLIT
 # ==============================================================================
 st.sidebar.title("Configurações")
-file_fin = st.sidebar.file_uploader("Ficha Financeira", type=["pdf"])
-file_car = st.sidebar.file_uploader("Fichas Cadastrais", type=["pdf"], accept_multiple_files=True)
-
+file_fin = st.sidebar.file_uploader("Ficha Financeira (PDF)", type=["pdf"])
+file_car = st.sidebar.file_uploader("Fichas Cadastrais (PDF)", type=["pdf"], accept_multiple_files=True)
 base = st.sidebar.number_input("Valor Base Classe A", value=4000.00)
 nome = st.sidebar.text_input("Nome do Servidor", "Ironildo da Silva Costa")
 matricula = st.sidebar.text_input("Matrícula", "0065998-3")
 
+col1, col2 = st.columns([1, 1])
+executar = col1.button("🚀 Executar Cálculo")
+limpar = col2.button("🗑️ Limpar Tudo")
+
+if limpar:
+    st.session_state.clear()
+    st.experimental_rerun()
+
 st.title("⚖️ Sistema de Cálculo Jurídico (PC/AL)")
-st.markdown("Cálculo automatizado de diferenças de classe com base em promoção.")
+st.markdown("Automação de cálculo de diferenças salariais por classe funcional.")
 
-if file_fin and file_car:
-    df_fin = ler_financeiro_universal(file_fin)
-    df_car = ler_cadastral(file_car)
-
-    if df_fin.empty:
-        st.error("❌ Ficha Financeira vazia ou ilegível (Não achou 'Subsídio' > R$1200 ou ano).")
-    elif df_car.empty:
-        st.error("❌ Nenhuma promoção identificada na ficha cadastral.")
+if executar:
+    if not file_fin or not file_car:
+        st.error("⚠️ Você precisa enviar a Ficha Financeira e pelo menos uma Ficha Cadastral.")
     else:
-        df = calcular(df_fin, df_car, base)
-        total = df['Diferenca_Final'].sum()
-        classe = df['Classe'].iloc[-1]
-        st.success(f"✅ Cálculo finalizado: Total = R$ {fmt_br(total)} | Classe Atual = {classe}")
+        df_fin = ler_financeiro_universal(file_fin)
+        df_car = ler_cadastral(file_car)
 
-        st.dataframe(df.style.format({
-            "Valor_Pago": "R$ {:,.2f}",
-            "Valor_Devido": "R$ {:,.2f}",
-            "Diferenca_Final": "R$ {:,.2f}"
-        }))
+        if df_fin.empty:
+            st.error("❌ Ficha Financeira inválida: verifique se há valores de subsídio e ano.")
+        elif df_car.empty:
+            st.error("❌ Nenhuma promoção válida encontrada na ficha cadastral.")
+        else:
+            df = calcular(df_fin, df_car, base)
+            total = df["Diferenca_Final"].sum()
+            classe = df["Classe"].iloc[-1]
 
-        pdf_bytes = gerar_pdf(df, nome, matricula, total)
-        st.download_button("📄 Baixar Relatório PDF", pdf_bytes, f"{nome}_laudo.pdf", "application/pdf")
-else:
-    st.info("⬅️ Faça o upload da ficha financeira e fichas cadastrais para iniciar.")
+            st.success(f"✅ Cálculo concluído. Total devido: R$ {fmt_br(total)} | Classe atual: {classe}")
+            st.dataframe(df)
+
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=df['Data'], y=df['Valor_Pago'], name='Pago', line=dict(color='red')))
+            fig.add_trace(go.Scatter(x=df['Data'], y=df['Valor_Devido'], name='Devido', line=dict(color='green')))
+            fig.update_layout(title="Comparativo de Valores", xaxis_title="Data", yaxis_title="Valor")
+            st.plotly_chart(fig, use_container_width=True)
