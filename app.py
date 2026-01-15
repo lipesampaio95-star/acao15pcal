@@ -4,6 +4,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from fpdf import FPDF
 from pypdf import PdfReader
+import pdfplumber
 import io
 import re
 
@@ -21,96 +22,85 @@ st.markdown("""
     .metric-card { background-color: #f8f9fa; border-radius: 10px; padding: 15px; text-align: center; border: 1px solid #e9ecef; }
     .total-card { background-color: #d4efdf; border: 2px solid #27ae60; border-radius: 10px; padding: 15px; text-align: center; }
     .success-box { background-color: #d4efdf; padding: 10px; border-radius: 5px; border-left: 5px solid #27ae60; }
+    div.stButton > button:first-child {
+        background-color: #2E86C1;
+        color: white;
+        font-size: 20px;
+        height: 3em;
+        width: 100%;
+        border-radius: 10px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# --- ROBÔ DE LEITURA DE PDF (NOVO) ---
+# --- FUNÇÕES DE LEITURA (ROBÔS) ---
+def limpar_moeda(valor_str):
+    if isinstance(valor_str, (int, float)): return float(valor_str)
+    if not valor_str: return 0.0
+    limpo = str(valor_str).replace('R$', '').replace('.', '').replace(' ', '').replace(',', '.')
+    try: return float(limpo)
+    except: return 0.0
+
+def ler_financeiro_pdf(arquivo):
+    dados = []
+    with pdfplumber.open(arquivo) as pdf:
+        for page in pdf.pages:
+            tables = page.extract_tables()
+            for table in tables:
+                for row in table:
+                    row = [x if x else "" for x in row]
+                    data_encontrada = None
+                    valor_encontrado = None
+                    for cell in row:
+                        cell_clean = str(cell).replace('\n', ' ').strip()
+                        if not data_encontrada:
+                            match_data = re.search(r'\b(\d{2}/\d{4})\b', cell_clean)
+                            if match_data:
+                                data_encontrada = match_data.group(1)
+                                continue
+                        if re.match(r'^R?\s?[\d\.]+,[\d]{2}$', cell_clean):
+                            v = limpar_moeda(cell_clean)
+                            if v > 1200: # Filtro básico para evitar pegar descontos/auxílios pequenos
+                                valor_encontrado = v
+                    if data_encontrada and valor_encontrado:
+                        dados.append({'Data': data_encontrada, 'Valor_Pago': valor_encontrado})
+    if dados:
+        df = pd.DataFrame(dados)
+        df['Data'] = pd.to_datetime(df['Data'], format='%m/%Y', errors='coerce')
+        if df['Data'].isnull().any(): df['Data'] = pd.to_datetime(df['Data'], errors='coerce')
+        return df.dropna().sort_values('Data')
+    return pd.DataFrame()
+
 def extrair_classe_do_codigo(codigo):
-    """
-    Identifica a classe (A-G) dentro dos códigos complexos da PC-AL.
-    Exemplos encontrados nos seus arquivos:
-    - 'PCEE440' -> Classe E
-    - 'PCEF440' -> Classe F
-    - 'NV08336 - AGPMNE4F40' -> Classe F
-    - 'AGPMNJ4G40' -> Classe G
-    """
     codigo = codigo.upper()
-    
-    # 1. Tenta padrão novo (Letra seguida de 40, ex: F40, G40)
-    # Ignora 'J4' ou 'N4' se aparecerem antes, foca na letra da classe + carga horária
     match_novo = re.search(r'([A-G])40', codigo)
-    if match_novo:
-        return match_novo.group(1)
-    
-    # 2. Tenta padrão antigo (PCE + Letra, ex: PCEE, PCEF)
+    if match_novo: return match_novo.group(1)
     match_antigo = re.search(r'PCE([A-G])', codigo)
-    if match_antigo:
-        return match_antigo.group(1)
-        
+    if match_antigo: return match_antigo.group(1)
     return None
 
 def ler_ficha_cadastral(arquivos_pdf):
-    """
-    Lê os PDFs, procura 'Data Promoção' e o código de nível, e retorna o histórico.
-    """
     historico = []
-    
-    # Regex ajustada para o layout do seu PDF:
-    # Procura uma data (XX/XX/XXXX) e, na mesma 'zona' de texto extraído, um código alfanumérico.
-    # O pypdf as vezes extrai o texto com quebras, então varremos o texto procurando padrões.
-    regex_data = r'(\d{2}/\d{2}/\d{4})'
-    # Regex genérica para capturar os códigos de classe que vimos (PCE... ou AGP...)
     regex_codigo = r'(PCE[A-Z]\d+|AGP[A-Z0-9]+|NV\d+.*?[A-Z]40)'
-    
     for arquivo in arquivos_pdf:
         try:
             reader = PdfReader(arquivo)
             for page in reader.pages:
                 texto = page.extract_text()
-                
-                # Estratégia: Encontrar todas as datas de promoção mencionadas
-                # No seu PDF, o campo é "Data Promoção" seguido do valor.
-                # Como o texto pode vir quebrado, vamos procurar linhas que contenham datas
-                # e códigos de classe próximos.
-                
-                # Vamos simplificar: extrair todas as datas e códigos da página
-                # e assumir que a 'Data Promoção' é a que está vinculada ao código de Nível.
-                # No layout, eles estão lado a lado ou linha abaixo.
-                
-                matches_data = re.findall(regex_data, texto)
                 matches_codigos = re.findall(regex_codigo, texto)
-                
-                # Se achou código e data na página, tenta parear (heurística simples)
-                # O ideal é que a página do mês X tem o status do mês X.
-                # Mas o campo "Data Promoção" é histórico (mostra a última).
-                # Então, se encontrarmos "16/04/2020" e "Classe F", sabemos que essa mudança ocorreu.
-                
-                for cod in matches_codigos:
-                    classe = extrair_classe_do_codigo(cod)
-                    if classe and matches_data:
-                        # Pega a data mais provável de ser a de promoção (geralmente a primeira ou a que se repete)
-                        # Na sua ficha, a "Data Promoção" aparece explicitamente.
-                        # Vamos varrer o texto procurando a string exata "Data Promoção" e pegando a data seguinte.
-                        
-                        match_especifico = re.search(r'Data Promoção\s*(\d{2}/\d{2}/\d{4})', texto)
-                        if match_especifico:
-                            data_promo = match_especifico.group(1)
-                            historico.append({
-                                'Data_Mudanca': pd.to_datetime(data_promo, dayfirst=True),
-                                'Classe': classe
-                            })
-        except Exception as e:
-            st.error(f"Erro no arquivo {arquivo.name}: {e}")
+                match_data_promo = re.search(r'Data Promoção\s*(\d{2}/\d{2}/\d{4})', texto)
+                if matches_codigos and match_data_promo:
+                    data = match_data_promo.group(1)
+                    for cod in matches_codigos:
+                        classe = extrair_classe_do_codigo(cod)
+                        if classe:
+                            historico.append({'Data_Mudanca': pd.to_datetime(data, dayfirst=True), 'Classe': classe})
+                            break 
+        except Exception as e: st.error(f"Erro no PDF {arquivo.name}: {e}")
+    if not historico: return pd.DataFrame(columns=['Data_Mudanca', 'Classe'])
+    return pd.DataFrame(historico).drop_duplicates().sort_values('Data_Mudanca')
 
-    if not historico:
-        return pd.DataFrame(columns=['Data_Mudanca', 'Classe'])
-    
-    # Limpeza: Remove duplicatas (mesma promoção aparece em vários meses)
-    df = pd.DataFrame(historico)
-    df = df.drop_duplicates().sort_values('Data_Mudanca')
-    return df
-
-# --- FUNÇÕES DE RELATÓRIO E CÁLCULO (MANTIDAS) ---
+# --- CÁLCULO E RELATÓRIOS ---
 def format_currency_br(value):
     return f"{value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
@@ -129,19 +119,16 @@ class PDFReport(FPDF):
 def gerar_pdf(df, nome, matricula, cpf, total):
     pdf = PDFReport()
     pdf.add_page()
-    # Dados
     pdf.set_fill_color(240, 240, 240)
     pdf.set_font('Arial', 'B', 10)
     pdf.cell(0, 8, f"  DADOS DO SERVIDOR", 1, 1, 'L', fill=True)
     pdf.set_font('Arial', '', 10)
     pdf.cell(0, 8, f"  Nome: {nome} | Matrícula: {matricula} | CPF: {cpf}", 1, 1, 'L')
     pdf.ln(5)
-    # Resumo
     pdf.set_fill_color(212, 239, 223)
     pdf.set_font('Arial', 'B', 12)
     pdf.cell(0, 12, f"VALOR TOTAL APURADO: R$ {format_currency_br(total)}", 1, 1, 'C', fill=True)
     pdf.ln(10)
-    # Tabela
     pdf.set_font('Arial', 'B', 9)
     w = [30, 20, 35, 35, 35] 
     headers = ['Mês/Ano', 'Classe', 'Pago (R$)', 'Devido (R$)', 'Diferença (R$)']
@@ -178,104 +165,130 @@ def gerar_txt_projefweb(df):
 def calcular(df_fin, df_car, valor_base_a):
     df_fin = df_fin.sort_values('Data')
     df_car = df_car.sort_values('Data_Mudanca')
-    
-    # Merge asof
     df_calc = pd.merge_asof(
         df_fin, df_car,
         left_on='Data', right_on='Data_Mudanca',
         direction='backward'
     )
-    
     mapa = {'A': 0, 'B': 1, 'C': 2, 'D': 3, 'E': 4, 'F': 5, 'G': 6}
     df_calc['Indice'] = df_calc['Classe'].map(mapa)
-    
     if df_calc['Indice'].isnull().any():
-         st.warning("⚠️ Atenção: Período sem classe definida encontrado. Assumindo Classe A para o início.")
          df_calc['Indice'] = df_calc['Indice'].fillna(0)
          df_calc['Classe'] = df_calc['Classe'].fillna('A')
 
     df_calc['Valor_Devido'] = valor_base_a * (1.15 ** df_calc['Indice'])
     df_calc['Diferenca'] = df_calc['Valor_Devido'] - df_calc['Valor_Pago']
     df_calc['Diferenca_Final'] = df_calc['Diferenca'].apply(lambda x: x if x > 0 else 0)
-    
     return df_calc
 
 # --- APP PRINCIPAL ---
 st.sidebar.title("Cálculo PC/AL")
-st.sidebar.info("Versão com Leitura Automática de PDF (Promoções).")
+st.sidebar.info("Sistema de Triagem Automática")
 
-st.sidebar.header("1. Financeiro")
-arquivo_fin = st.sidebar.file_uploader("Ficha Financeira (Excel/CSV)", type=['xlsx', 'csv'])
+# Inputs
+st.sidebar.header("1. Documentos")
+arquivo_fin = st.sidebar.file_uploader("Ficha Financeira (PDF/Excel)", type=['xlsx', 'csv', 'pdf'])
+arquivos_pdf = st.sidebar.file_uploader("Fichas Cadastrais (PDFs)", type=['pdf'], accept_multiple_files=True)
 
-st.sidebar.header("2. Carreira (PDFs)")
-arquivos_pdf = st.sidebar.file_uploader("Fichas Cadastrais (PDF)", type=['pdf'], accept_multiple_files=True)
-
-st.sidebar.header("3. Parâmetros")
+st.sidebar.header("2. Dados do Processo")
 valor_base_a = st.sidebar.number_input("Valor Base (Classe A)", value=4000.00, step=100.00)
-nome = st.sidebar.text_input("Nome", "SERVIDOR")
+nome = st.sidebar.text_input("Nome", "SERVIDOR PC/AL")
 matricula = st.sidebar.text_input("Matrícula", "000.000-0")
 cpf = st.sidebar.text_input("CPF", "000.000.000-00")
 
-st.title("⚖️ Automação de Cálculo: 15% Entre Classes")
+# Botão de Reset (Limpar Estado)
+if st.sidebar.button("Limpar Dados"):
+    for key in st.session_state.keys():
+        del st.session_state[key]
+    st.experimental_rerun()
 
+st.title("⚖️ Automação de Cálculos Judiciais")
+
+# BOTÃO DE AÇÃO PRINCIPAL
+# Apenas habilita se os arquivos existirem
 if arquivo_fin and arquivos_pdf:
-    try:
-        # 1. Ler Financeiro
-        if arquivo_fin.name.endswith('.csv'):
-            df_fin = pd.read_csv(arquivo_fin)
-        else:
-            df_fin = pd.read_excel(arquivo_fin)
-            
-        cols_fin = [c for c in df_fin.columns]
-        col_data = next((c for c in cols_fin if 'data' in c.lower()), 'Data')
-        col_valor = next((c for c in cols_fin if 'valor' in c.lower() or 'pago' in c.lower()), 'Valor_Pago')
-        df_fin = df_fin.rename(columns={col_data: 'Data', col_valor: 'Valor_Pago'})
-        df_fin['Data'] = pd.to_datetime(df_fin['Data'])
-        
-        # 2. Ler Carreira (PDF)
-        with st.spinner('Lendo Fichas Cadastrais...'):
-            df_car = ler_ficha_cadastral(arquivos_pdf)
-            
-        if df_car.empty:
-            st.warning("Não encontrei datas de promoção. Verifique se os PDFs são Fichas Cadastrais válidas.")
-        else:
-            st.markdown(f"<div class='success-box'><b>Processado!</b> Encontradas {len(df_car)} promoções.</div>", unsafe_allow_html=True)
-            st.dataframe(df_car)
-            
-            # 3. Calcular
-            res = calcular(df_fin, df_car, valor_base_a)
-            total = res['Diferenca_Final'].sum()
-            
-            # 4. Resultados
-            c1, c2, c3, c4 = st.columns(4)
-            c1.markdown(f"<div class='metric-card'><small>Cliente</small><br><b>{nome}</b></div>", unsafe_allow_html=True)
-            c2.markdown(f"<div class='metric-card'><small>Pagamentos</small><br><b>{len(res)}</b></div>", unsafe_allow_html=True)
-            c3.markdown(f"<div class='metric-card'><small>Classe Atual</small><br><b>{res['Classe'].iloc[-1]}</b></div>", unsafe_allow_html=True)
-            c4.markdown(f"<div class='total-card'><small>DIFERENÇA TOTAL</small><br><span class='big-font'>R$ {format_currency_br(total)}</span></div>", unsafe_allow_html=True)
-            
-            st.markdown("---")
-            
-            tab1, tab2 = st.tabs(["📊 Gráficos", "📥 Exportar"])
-            with tab1:
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(x=res['Data'], y=res['Valor_Pago'], name='Pago', line=dict(color='red')))
-                fig.add_trace(go.Scatter(x=res['Data'], y=res['Valor_Devido'], name='Devido', line=dict(color='green', dash='dash')))
-                st.plotly_chart(fig, use_container_width=True)
-            with tab2:
-                c_dl1, c_dl2, c_dl3 = st.columns(3)
-                # Excel
-                buffer = io.BytesIO()
-                with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                    res.to_excel(writer, index=False)
-                c_dl1.download_button("📊 Excel", buffer.getvalue(), f"{nome}_calc.xlsx", "application/vnd.ms-excel")
-                # PDF
-                pdf_bytes = gerar_pdf(res, nome, matricula, cpf, total)
-                c_dl2.download_button("📄 PDF Laudo", pdf_bytes, f"{nome}_laudo.pdf", "application/pdf")
-                # TXT
-                txt_bytes = gerar_txt_projefweb(res)
-                c_dl3.download_button("📝 Projefweb", txt_bytes, f"{nome}_projefweb.txt", "text/plain")
+    if st.button("🚀 Executar Cálculos"):
+        with st.spinner('Processando Ficha Financeira e Cadastral...'):
+            try:
+                # 1. Processar Financeiro
+                df_fin = pd.DataFrame()
+                if arquivo_fin.name.endswith('.pdf'):
+                    df_fin = ler_financeiro_pdf(arquivo_fin)
+                elif arquivo_fin.name.endswith('.csv'):
+                    df_fin = pd.read_csv(arquivo_fin)
+                else:
+                    df_fin = pd.read_excel(arquivo_fin)
                 
-    except Exception as e:
-        st.error(f"Erro: {e}")
-else:
-    st.info("Aguardando upload dos arquivos (Financeiro + PDFs Cadastrais).")
+                # Normalização Financeira
+                if not df_fin.empty:
+                    cols = [c for c in df_fin.columns]
+                    col_data = next((c for c in cols if 'data' in c.lower()), 'Data')
+                    col_valor = next((c for c in cols if 'valor' in c.lower() or 'pago' in c.lower()), 'Valor_Pago')
+                    df_fin = df_fin.rename(columns={col_data: 'Data', col_valor: 'Valor_Pago'})
+                    df_fin['Data'] = pd.to_datetime(df_fin['Data'])
+
+                # 2. Processar Carreira
+                df_car = ler_ficha_cadastral(arquivos_pdf)
+                
+                # 3. Calcular e Salvar no Session State
+                if not df_fin.empty and not df_car.empty:
+                    res = calcular(df_fin, df_car, valor_base_a)
+                    total = res['Diferenca_Final'].sum()
+                    
+                    # Salva no estado para persistir após clique de download
+                    st.session_state['resultado'] = res
+                    st.session_state['total'] = total
+                    st.session_state['processado'] = True
+                else:
+                    st.error("Erro: Não foi possível extrair dados válidos dos arquivos. Verifique se são legíveis.")
+                    
+            except Exception as e:
+                st.error(f"Ocorreu um erro no processamento: {e}")
+
+# EXIBIÇÃO DOS RESULTADOS (FORA DO BLOCO DO BOTÃO)
+# Isso garante que o dashboard continue aparecendo mesmo se a página recarregar ao clicar em download
+if 'processado' in st.session_state and st.session_state['processado']:
+    res = st.session_state['resultado']
+    total = st.session_state['total']
+    
+    # Dashboard
+    c1, c2, c3, c4 = st.columns(4)
+    c1.markdown(f"<div class='metric-card'><small>Cliente</small><br><b>{nome}</b></div>", unsafe_allow_html=True)
+    c2.markdown(f"<div class='metric-card'><small>Meses</small><br><b>{len(res)}</b></div>", unsafe_allow_html=True)
+    c3.markdown(f"<div class='metric-card'><small>Última Classe</small><br><b>{res['Classe'].iloc[-1]}</b></div>", unsafe_allow_html=True)
+    c4.markdown(f"<div class='total-card'><small>DIFERENÇA TOTAL</small><br><span class='big-font'>R$ {format_currency_br(total)}</span></div>", unsafe_allow_html=True)
+    
+    st.markdown("---")
+    
+    tab1, tab2 = st.tabs(["📊 Análise Gráfica", "📥 Exportar Relatórios"])
+    
+    with tab1:
+        st.subheader("Evolução do Prejuízo")
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=res['Data'], y=res['Valor_Pago'], name='Valor Pago', line=dict(color='#e74c3c')))
+        fig.add_trace(go.Scatter(x=res['Data'], y=res['Valor_Devido'], name='Valor Devido (Lei)', line=dict(color='#27ae60', dash='dash')))
+        st.plotly_chart(fig, use_container_width=True)
+        
+        st.dataframe(res[['Data', 'Classe', 'Valor_Pago', 'Valor_Devido', 'Diferenca_Final']].style.format({
+            'Valor_Pago': 'R$ {:,.2f}', 'Valor_Devido': 'R$ {:,.2f}', 'Diferenca_Final': 'R$ {:,.2f}'
+        }))
+
+    with tab2:
+        st.subheader("Downloads Oficiais")
+        c_dl1, c_dl2, c_dl3 = st.columns(3)
+        
+        # Excel
+        buffer = io.BytesIO()
+        with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer: res.to_excel(writer, index=False)
+        c_dl1.download_button("📊 Baixar Planilha (Excel)", buffer.getvalue(), f"{nome}_calculo.xlsx", "application/vnd.ms-excel")
+        
+        # PDF
+        pdf_bytes = gerar_pdf(res, nome, matricula, cpf, total)
+        c_dl2.download_button("📄 Baixar Laudo (PDF)", pdf_bytes, f"{nome}_laudo.pdf", "application/pdf")
+        
+        # Projefweb
+        txt_bytes = gerar_txt_projefweb(res)
+        c_dl3.download_button("📝 Baixar Projefweb (TXT)", txt_bytes, f"{nome}_projefweb.txt", "text/plain")
+
+elif not arquivo_fin:
+    st.info("👋 Bem-vindo! Para começar, faça o upload dos arquivos na barra lateral.")
