@@ -1,138 +1,197 @@
-
 import streamlit as st
 import pandas as pd
-import pdfplumber
-from fpdf import FPDF
-import io
-import re
+from PyPDF2 import PdfReader
 from datetime import datetime
+import base64
+from io import BytesIO
+from fpdf import FPDF
 
-# ==============================================================================
-# CONFIGURAÇÃO E ESTILO VISUAL
-# ==============================================================================
-st.set_page_config(page_title="Cálculo de Diferença Salarial", page_icon="⚖️", layout="wide")
+st.set_page_config(page_title="Calculadora de Diferença de Classe (PC/AL)", layout="wide")
 
-st.markdown("""
-<style>
-    .metric-card {
-        background-color: #ffffff;
-        border-radius: 10px;
-        padding: 20px;
-        text-align: center;
-        box-shadow: 2px 2px 10px rgba(0,0,0,0.1);
-        border-left: 5px solid #3498db;
+# ==================== Funções Auxiliares ====================
+
+def reajuste_anual(ano):
+    reajustes = {
+        2015: 1.05,
+        2018: 1.0295,
+        2022: 1.10,
+        2025: 1.0393
     }
-    .metric-value {
-        font-size: 24px;
-        font-weight: bold;
-        color: #2c3e50;
-    }
-    .metric-label {
-        font-size: 14px;
-        color: #7f8c8d;
-        text-transform: uppercase;
-        letter-spacing: 1px;
-    }
-    .total-card {
-        background-color: #d4efdf;
-        border-radius: 10px;
-        padding: 20px;
-        text-align: center;
-        box-shadow: 2px 2px 10px rgba(0,0,0,0.1);
-        border-left: 5px solid #27ae60;
-    }
-    .total-value {
-        font-size: 32px;
-        font-weight: bold;
-        color: #27ae60;
-    }
-    div.stButton > button:first-child {
-        background-color: #2980b9;
-        color: white;
-        font-size: 18px;
-        border-radius: 8px;
-        width: 100%;
-        padding: 10px 0;
-    }
-    div.stButton > button:first-child:hover {
-        background-color: #1a5276;
-    }
-</style>
-""", unsafe_allow_html=True)
+    return reajustes.get(ano, 1.0)
 
-# ==============================================================================
-# FUNÇÕES AUXILIARES
-# ==============================================================================
+def calcular_base_A_por_ano(base_inicial):
+    base_por_ano = {}
+    base_atual = base_inicial
+    for ano in range(2014, datetime.now().year + 1):
+        base_por_ano[ano] = round(base_atual, 2)
+        base_atual *= reajuste_anual(ano)
+    return base_por_ano
 
-def limpar_valor(texto):
-    if isinstance(texto, (int, float)): return float(texto)
-    if not texto: return 0.0
-    t = str(texto).replace('"', '').replace("'", "").replace('R$', '').strip()
-    try:
-        if ',' in t and '.' in t:
-            if t.rfind(',') > t.rfind('.'):
-                t = t.replace('.', '').replace(',', '.')
-            else:
-                t = t.replace(',', '')
-        elif ',' in t:
-            t = t.replace(',', '.')
-        return float(t)
-    except:
-        return 0.0
+def extrair_valores_pdf(file):
+    reader = PdfReader(file)
+    texto = ""
+    for page in reader.pages:
+        texto += page.extract_text() + "\n"
+    linhas = texto.split("\n")
+    
+    ano = None
+    for linha in linhas:
+        if "Ano Comp:" in linha:
+            try:
+                ano = int(linha.split(":")[1].strip())
+            except:
+                pass
+    
+    meses = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho",
+             "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
+    
+    adicionais_ferias = {}
+    pagos = {}
 
-def fmt_br(v):
-    return f"{v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    for i, linha in enumerate(linhas):
+        if "133.00 ADICIONAL DE FERIAS" in linha:
+            valores = linhas[i + 1].split()
+            for j, mes in enumerate(meses):
+                try:
+                    valor = float(valores[j].replace(".", "").replace(",", "."))
+                    if valor > 0:
+                        adicionais_ferias[f"{ano}-{j+1:02d}"] = valor
+                except:
+                    pass
 
-# ==============================================================================
-# INTERFACE
-# ==============================================================================
+        if "126.00 SUBSIDIO" in linha:
+            valores = linhas[i + 1].split()
+            for j, mes in enumerate(meses):
+                try:
+                    valor = float(valores[j].replace(".", "").replace(",", "."))
+                    pagos[f"{ano}-{j+1:02d}"] = valor
+                except:
+                    pass
 
-st.sidebar.title("Parâmetros de Entrada")
+    return pagos, adicionais_ferias
 
-arquivos = st.sidebar.file_uploader("Ficha Financeira (PDF - um por ano)", type=["pdf"], accept_multiple_files=True)
+def calcular_devido(base_A, classe_indice, nivel_indice):
+    return (base_A * (1.15 ** classe_indice)) + (base_A * 0.05 * nivel_indice)
 
-base_a = st.sidebar.number_input("Base Classe A (R$)", value=4000.00)
-nome = st.sidebar.text_input("Nome do Servidor", "Ex: João da Silva")
-matricula = st.sidebar.text_input("Matrícula", "0000000")
+def gerar_pdf(servidor, matricula, resultado, total):
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", "B", 16)
+    pdf.cell(0, 10, "Laudo de Diferenças de Classe", ln=True, align="C")
+    
+    pdf.set_font("Arial", size=12)
+    pdf.cell(0, 10, f"Servidor: {servidor}", ln=True)
+    pdf.cell(0, 10, f"Matrícula: {matricula}", ln=True)
+    pdf.ln(10)
 
-with st.sidebar.expander("📈 Promoções (Manual)"):
-    if "promocoes" not in st.session_state:
-        st.session_state["promocoes"] = []
+    col_widths = [30, 25, 25, 30, 30, 30]
+    headers = ["Mês", "Classe", "Nível", "Valor Pago", "Valor Devido", "Diferença"]
 
-    nova_data = st.date_input("Data da Promoção")
-    nova_classe = st.selectbox("Classe", ["A", "B", "C", "D", "E", "F", "G"])
-    if st.button("Registrar Promoção"):
-        st.session_state["promocoes"].append({
-            "data": nova_data,
-            "classe": nova_classe
-        })
+    for i, header in enumerate(headers):
+        pdf.cell(col_widths[i], 10, header, 1, 0, "C")
+    pdf.ln()
 
-    if st.button("🗑 Limpar Promoções"):
-        st.session_state["promocoes"] = []
+    for _, row in resultado.iterrows():
+        pdf.cell(col_widths[0], 10, row["Data"], 1)
+        pdf.cell(col_widths[1], 10, row["Classe"], 1)
+        pdf.cell(col_widths[2], 10, row["Nível"], 1)
+        pdf.cell(col_widths[3], 10, f"{row['Valor Pago']:.2f}", 1)
+        pdf.cell(col_widths[4], 10, f"{row['Valor Devido']:.2f}", 1)
+        pdf.cell(col_widths[5], 10, f"{row['Diferença']:.2f}", 1)
+        pdf.ln()
 
-    promocoes_registradas = st.session_state["promocoes"]
+    pdf.ln(5)
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 10, f"Valor Total Acumulado: R$ {total:.2f}", ln=True)
 
-    for p in promocoes_registradas:
-        st.markdown(f"- {p['data'].strftime('%d/%m/%Y')} → Classe {p['classe']}")
+    buffer = BytesIO()
+    pdf.output(buffer)
+    return buffer.getvalue()
 
-st.sidebar.markdown("---")
-if st.sidebar.button("🧹 Limpar Tudo"):
-    st.session_state.clear()
-    st.experimental_rerun()
-
-if st.sidebar.button("🚀 Calcular"):
-    st.session_state["executar"] = True
+# ==================== Layout da Página ====================
 
 st.title("⚖️ Cálculo de Diferença de Classe (PC/AL)")
 
-if st.session_state.get("executar", False):
-    if not arquivos:
-        st.warning("⚠️ Nenhum arquivo de ficha financeira foi enviado.")
-    elif not promocoes_registradas:
-        st.warning("⚠️ Nenhuma promoção registrada.")
-    else:
-        st.success("✅ Dados carregados. Pronto para executar cálculo (exemplo simulado aqui).")
+st.sidebar.header("Parâmetros de Entrada")
+arquivos = st.sidebar.file_uploader("Ficha Financeira (PDF - um por ano)", type="pdf", accept_multiple_files=True)
 
-else:
-    st.info("👈 Envie os arquivos e registre promoções para iniciar.")
+base_classe_A = st.sidebar.number_input("Base Classe A (R$)", value=3178.00, step=50.00, format="%.2f")
+nome = st.sidebar.text_input("Nome do Servidor", value="Ex: João da Silva")
+matricula = st.sidebar.text_input("Matrícula", value="0000000")
 
+st.sidebar.markdown("---")
+promocoes_ativas = st.sidebar.checkbox("📌 Promoções (Manual)", value=True)
+
+if 'promocoes' not in st.session_state:
+    st.session_state.promocoes = []
+
+if promocoes_ativas:
+    data_promocao = st.sidebar.text_input("Data da Promoção", value="2016/03/03")
+    classe = st.sidebar.selectbox("Classe", ["A", "B", "C", "D", "E", "F", "G"])
+
+    if st.sidebar.button("Registrar Promoção"):
+        st.session_state.promocoes.append({"data": data_promocao, "classe": classe})
+
+    if st.sidebar.button("🗑️ Limpar Promoções"):
+        st.session_state.promocoes = []
+
+    for promo in st.session_state.promocoes:
+        st.sidebar.markdown(f"- {promo['data']} ➔ Classe {promo['classe']}")
+
+if st.sidebar.button("🧹 Limpar Tudo"):
+    st.session_state.promocoes = []
+    st.rerun()
+
+# ==================== Execução ====================
+
+if st.button("🚀 Calcular"):
+    if not arquivos or not st.session_state.promocoes:
+        st.warning("⚠️ Envie os arquivos e registre promoções.")
+        st.stop()
+
+    base_ano = calcular_base_A_por_ano(base_classe_A)
+    df_final = pd.DataFrame()
+
+    for arquivo in arquivos:
+        pagos, ferias = extrair_valores_pdf(arquivo)
+
+        for mes_ref, valor_pago in pagos.items():
+            data = datetime.strptime(mes_ref, "%Y-%m")
+            if (datetime.now() - data).days > 5 * 365:
+                continue  # prescrição de 5 anos
+
+            classe_atual = "A"
+            for promo in sorted(st.session_state.promocoes, key=lambda x: x['data']):
+                data_promo = datetime.strptime(promo['data'], "%Y/%m/%d")
+                if data >= data_promo:
+                    classe_atual = promo['classe']
+
+            classe_index = ord(classe_atual.upper()) - ord("A")
+            nivel_index = 3  # fixo IV
+
+            ano = data.year
+            base_mes = base_ano.get(ano, base_classe_A)
+            devido = calcular_devido(base_mes, classe_index, nivel_index)
+
+            if mes_ref in ferias:
+                devido += round(devido / 3, 2)  # adicional 1/3 férias
+
+            diferenca = max(0, devido - valor_pago)
+
+            df_final = pd.concat([df_final, pd.DataFrame([{
+                "Data": mes_ref,
+                "Classe": classe_atual,
+                "Nível": "IV",
+                "Valor Pago": valor_pago,
+                "Valor Devido": devido,
+                "Diferença": diferenca
+            }])], ignore_index=True)
+
+    total = df_final["Diferença"].sum()
+
+    st.success("✅ Cálculo realizado com sucesso.")
+    st.dataframe(df_final)
+
+    pdf_bytes = gerar_pdf(nome, matricula, df_final, total)
+
+    st.download_button("📄 Baixar PDF", data=pdf_bytes, file_name="laudo.pdf", mime="application/pdf")
