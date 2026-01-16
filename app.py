@@ -1,156 +1,159 @@
 import streamlit as st
 import pandas as pd
-import plotly.graph_objects as go
-from fpdf import FPDF
-from pypdf import PdfReader
-import pdfplumber
-import pytesseract
-import fitz
-import io
 import re
-import datetime
+import io
+from fpdf import FPDF
 
+# Configurações da página
 st.set_page_config(page_title="Cálculo PC/AL", layout="wide")
 
-def fmt_br(v): return f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+def fmt_br(v):
+    return f"{v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
-def ocr_pdf(file_bytes):
-    linhas = []
-    doc = fitz.open(stream=file_bytes, filetype="pdf")
-    for page in doc:
-        pix = page.get_pixmap(dpi=300)
-        img = pix.tobytes("png")
-        texto = pytesseract.image_to_string(img, lang="por")
-        linhas.extend(texto.splitlines())
-    return linhas
-
-def extrair_numeros_linha(linha):
-    partes = re.findall(r"[\d\.,]+", linha)
-    valores = []
-    for p in partes:
-        try:
-            p = p.replace(".", "").replace(",", ".")
-            val = float(p)
-            if 0 < val < 100_000:
-                valores.append(val)
-        except:
-            continue
-    return valores
-
-def ler_financeiro(file):
-    linhas = []
+def limpar_valor(texto):
+    """Converte valores monetários para float"""
+    if isinstance(texto, (int, float)): return float(texto)
+    t = str(texto).replace('R$', '').replace('.', '').replace(',', '.')
     try:
-        with pdfplumber.open(file) as pdf:
-            for page in pdf.pages:
-                txt = page.extract_text()
-                if txt:
-                    linhas.extend(txt.splitlines())
+        return float(t)
     except:
-        linhas = ocr_pdf(file.read())
+        return 0.0
+
+def extrair_financeiro(pdf_file):
+    """Extrai dados da ficha financeira em PDF pesquisável"""
+    try:
+        import pdfplumber
+    except:
+        st.error("⚠️ A biblioteca pdfplumber não está instalada.")
+        return pd.DataFrame()
 
     dados = []
-    ano_atual = None
-    meses_port = ['JANEIRO','FEVEREIRO','MARCO','ABRIL','MAIO','JUNHO','JULHO','AGOSTO','SETEMBRO','OUTUBRO','NOVEMBRO','DEZEMBRO']
+    with pdfplumber.open(pdf_file) as pdf:
+        for page in pdf.pages:
+            texto = page.extract_text()
+            if not texto: continue
+            linhas = texto.split('\n')
+            ano = None
+            for linha in linhas:
+                linha_upper = linha.upper()
+                # Detecta ano da competência
+                if "ANO COMP" in linha_upper:
+                    m = re.search(r'(\d{4})', linha)
+                    if m: ano = int(m.group(1))
+                # Detecta subsídio e valores mensais
+                if "SUBSÍDIO" in linha_upper or "SUBSIDIO" in linha_upper:
+                    meses = re.findall(r'(JAN|FEV|MAR|ABR|MAI|JUN|JUL|AGO|SET|OUT|NOV|DEZ)', linha_upper)
+                    valores = re.findall(r'R\$ ?[\d\.,]+', linha)
+                    if ano and len(meses) == len(valores):
+                        for i in range(len(meses)):
+                            mes_num = i + 1
+                            valor = limpar_valor(valores[i])
+                            dados.append({
+                                "Data": pd.to_datetime(f"{ano}-{mes_num:02d}-01"),
+                                "Valor_Pago": valor
+                            })
+    df = pd.DataFrame(dados)
+    return df.sort_values("Data")
 
-    for linha in linhas:
-        linha_up = linha.upper()
-        ano_match = re.search(r"ANO\s*COMP[:\s]+(20\d{2})", linha_up)
-        if ano_match:
-            ano_atual = int(ano_match.group(1))
+def extrair_carreira(pdf_files):
+    """Extrai histórico de promoções a partir das fichas cadastrais"""
+    try:
+        from PyPDF2 import PdfReader
+    except:
+        st.error("⚠️ A biblioteca PyPDF2 não está instalada.")
+        return pd.DataFrame()
 
-        for idx, mes_nome in enumerate(meses_port):
-            if mes_nome in linha_up and ano_atual:
-                numeros = extrair_numeros_linha(linha)
-                sal = [n for n in numeros if n > 1200]
-                if sal:
-                    data = pd.to_datetime(f"{ano_atual}-{idx+1:02d}-01")
-                    dados.append({"Data": data, "Valor_Pago": sal[0]})
-    return pd.DataFrame(dados)
-
-def ler_cadastral(arquivos):
     historico = []
-    reg_cod = r"(PCE[A-Z]\d+|AGP[A-Z0-9]+|NV\d+.*?[A-Z]40)"
-    for arq in arquivos:
-        try:
-            reader = PdfReader(arq)
-            for page in reader.pages:
-                txt = page.extract_text() or ""
-                linhas = txt.splitlines()
-                for linha in linhas:
-                    match_data = re.search(r"(\d{2}/\d{2}/\d{4})", linha)
-                    match_cod = re.search(reg_cod, linha)
-                    if match_data and match_cod:
-                        data_pg = pd.to_datetime(match_data.group(1), dayfirst=True)
-                        cod = match_cod.group(1).upper()
-                        m = re.search(r"([A-G])40", cod)
-                        if m:
-                            classe = m.group(1)
-                            historico.append({'Data_Mudanca': data_pg, 'Classe': classe})
-        except Exception as e:
-            print("Erro ao ler ficha:", e)
-
-    if not historico:
-        return pd.DataFrame(columns=['Data_Mudanca', 'Classe'])
-
-    df = pd.DataFrame(historico)
-    df = df.drop_duplicates().sort_values('Data_Mudanca').reset_index(drop=True)
+    for file in pdf_files:
+        reader = PdfReader(file)
+        for page in reader.pages:
+            txt = page.extract_text()
+            if not txt: continue
+            # Extrair promoções
+            matches = re.findall(r'Data Promoção\s*:\s*(\d{2}/\d{2}/\d{4}).*?(PC[EA][A-Z0-9\-]+|NV[0-9A-Z\-]+|AGP[A-Z0-9\-]+)', txt)
+            for data_str, cod in matches:
+                classe = None
+                if "G40" in cod:
+                    classe = "G"
+                elif "F40" in cod:
+                    classe = "F"
+                elif "E40" in cod:
+                    classe = "E"
+                elif "D40" in cod:
+                    classe = "D"
+                elif "C40" in cod:
+                    classe = "C"
+                elif "B40" in cod:
+                    classe = "B"
+                elif "A40" in cod:
+                    classe = "A"
+                if classe:
+                    historico.append({
+                        "Data_Mudanca": pd.to_datetime(data_str, dayfirst=True),
+                        "Classe": classe
+                    })
+    df = pd.DataFrame(historico).drop_duplicates().sort_values("Data_Mudanca")
     return df
 
-def calcular(df_fin, df_car, base):
-    if df_car.empty:
-        df_car = pd.DataFrame([{'Data_Mudanca': df_fin['Data'].min(), 'Classe': 'A'}])
-    else:
-        primeira_data = df_fin['Data'].min()
-        if df_car['Data_Mudanca'].min() > primeira_data:
-            df_car = pd.concat([pd.DataFrame([{'Data_Mudanca': primeira_data, 'Classe': 'A'}]), df_car], ignore_index=True)
-    df_fin = df_fin.groupby('Data', as_index=False).agg({'Valor_Pago': 'sum'})
-    df = pd.merge_asof(
-        df_fin.sort_values('Data'),
-        df_car.sort_values('Data_Mudanca'),
-        left_on='Data',
-        right_on='Data_Mudanca',
-        direction='backward'
-    )
+def calcular_diferencas(df_fin, df_car, base_valor):
+    """Cruza a ficha financeira com o histórico de carreira"""
     mapa = {'A':0, 'B':1, 'C':2, 'D':3, 'E':4, 'F':5, 'G':6}
-    df['Indice'] = df['Classe'].map(mapa).fillna(0)
-    df['Classe'] = df['Classe'].fillna('A')
-    df['Valor_Devido'] = base * (1.15 ** df['Indice'])
-    df['Diferenca'] = df['Valor_Devido'] - df['Valor_Pago']
-    df['Diferenca_Final'] = df['Diferenca'].apply(lambda x: x if x > 0 else 0)
+    df = pd.merge_asof(df_fin.sort_values("Data"), df_car.sort_values("Data_Mudanca"),
+                       left_on="Data", right_on="Data_Mudanca", direction='backward')
+    df["Classe"] = df["Classe"].fillna("A")
+    df["Indice"] = df["Classe"].map(mapa).fillna(0)
+    df["Valor_Devido"] = base_valor * (1.15 ** df["Indice"])
+
+    # Adicionais (simples para Streamlit Cloud)
+    df["Mes"] = df["Data"].dt.month
+    df["Adicional_Ferias"] = df["Mes"].apply(lambda m: base_valor if m == 1 else 0)
+    df["Terco_Ferias"] = df["Adicional_Ferias"] / 3
+    df["Decimo_Terceiro"] = df["Mes"].apply(lambda m: base_valor if m == 12 else 0)
+
+    df["Diferenca_Base"] = df["Valor_Devido"] - df["Valor_Pago"]
+    df["Diferenca_Total"] = df["Diferenca_Base"] + df["Terco_Ferias"] + df["Decimo_Terceiro"]
+    df["Diferenca_Final"] = df["Diferenca_Total"].apply(lambda x: x if x > 0 else 0)
     return df
 
-# Interface
-st.title("⚖️ Sistema de Cálculo PC/AL")
+def gerar_txt_projefweb(df):
+    """Gera TXT no padrão Projefweb"""
+    s = io.StringIO()
+    for _, row in df.iterrows():
+        if row["Diferenca_Final"] > 0:
+            data_fmt = row["Data"].strftime("%m-%Y")
+            valor_fmt = fmt_br(row["Diferenca_Final"])
+            s.write(f"{data_fmt}\tR$ {valor_fmt}\n")
+    return s.getvalue().encode('utf-8')
+
+# ========== INTERFACE STREAMLIT ==========
+st.title("⚖️ Sistema de Cálculo PC/AL - Versão Streamlit Cloud")
 
 col1, col2 = st.columns(2)
 with col1:
-    base = st.number_input("Valor Base da Classe A (R$)", value=4000.00, step=100.0)
-    nome = st.text_input("Nome do Servidor", "Servidor Exemplo")
-    mat = st.text_input("Matrícula", "000000-0")
+    fin_file = st.file_uploader("📄 Ficha Financeira (PDF)", type=["pdf"])
 with col2:
-    fin = st.file_uploader("📂 Ficha Financeira (PDF)", type=["pdf"])
-    car = st.file_uploader("📂 Fichas Cadastrais (PDFs)", type=["pdf"], accept_multiple_files=True)
+    car_files = st.file_uploader("📂 Fichas Cadastrais (PDFs)", type=["pdf"], accept_multiple_files=True)
 
-colbtn1, colbtn2 = st.columns(2)
-executar = colbtn1.button("🚀 Executar Cálculo")
-limpar = colbtn2.button("🗑️ Limpar Tudo")
+base_valor = st.number_input("💰 Valor Base Classe A (R$)", value=4000.00)
+nome = st.text_input("👤 Nome do Servidor", "Ex: João Silva")
+matricula = st.text_input("🆔 Matrícula", "0000000")
 
-if limpar:
-    st.session_state.clear()
-    st.experimental_rerun()
+if st.button("🚀 Executar Cálculo"):
+    if fin_file and car_files:
+        df_fin = extrair_financeiro(fin_file)
+        df_car = extrair_carreira(car_files)
 
-if executar and fin and car:
-    st.info("📥 Processando arquivos...")
-    df_fin = ler_financeiro(fin)
-    df_car = ler_cadastral(car)
+        if df_fin.empty or df_car.empty:
+            st.error("⚠️ Dados insuficientes. Verifique os PDFs.")
+        else:
+            resultado = calcular_diferencas(df_fin, df_car, base_valor)
+            total = resultado["Diferenca_Final"].sum()
 
-    if df_fin.empty or df_car.empty:
-        st.error("⚠️ Dados insuficientes. Verifique os PDFs.")
+            st.success(f"Cálculo concluído com sucesso! Total devido: R$ {fmt_br(total)}")
+
+            st.dataframe(resultado[["Data", "Classe", "Valor_Pago", "Valor_Devido", "Diferenca_Final"]])
+
+            txt_bytes = gerar_txt_projefweb(resultado)
+            st.download_button("📑 Baixar Projefweb TXT", txt_bytes, f"{nome}_projefweb.txt", "text/plain")
     else:
-        res = calcular(df_fin, df_car, base)
-        total = res['Diferenca_Final'].sum()
-
-        st.success("✅ Cálculo concluído!")
-        st.markdown(f"### Total Devido: {fmt_br(total)}")
-
-        st.dataframe(res)
+        st.warning("👈 Faça upload dos dois arquivos para iniciar.")
