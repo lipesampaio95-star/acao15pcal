@@ -160,8 +160,13 @@ with st.form("promocoes"):
             except: st.warning(f"Data inválida: {d}")
 
 if st.button("🚀 Calcular"):
+    st.session_state["executar"] = True
     if not uploaded_files or not classe_dict:
-        st.warning("Envie os arquivos e registre promoções.")
+        if st.session_state.get("executar", False):
+    if not arquivos:
+        st.warning("⚠️ Nenhum arquivo de ficha financeira foi enviado.")
+    elif not promocoes_registradas:
+        st.warning("⚠️ Nenhuma promoção registrada.")
     else:
         all_df = []
         for file in uploaded_files:
