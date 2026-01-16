@@ -1,67 +1,38 @@
-# ⚖️ Sistema de Cálculo PC/AL - Versão Cronológica por Promoção
+# 🧮 Sistema de Cálculo PC/AL (Streamlit Cloud)
 
-Este sistema permite calcular automaticamente diferenças remuneratórias de servidores públicos com base na **progressão funcional** (promoções por classe) conforme fichas **financeiras** e **cadastrais** em formato PDF.
+Sistema automatizado para calcular diferenças salariais por evolução de classe com base em:
 
----
+- 📄 Ficha Financeira (PDF)
+- 📂 Fichas Cadastrais (PDFs)
 
 ## ✅ Funcionalidades
 
-- 📂 Leitura de ficha financeira (valores pagos por mês).
-- 🧾 Leitura da ficha cadastral (datas de promoção e classe).
-- 📅 Identificação correta do mês/ano em que a promoção passa a valer.
-- 🧠 Cálculo do valor devido com base na classe correta mês a mês.
-- 📄 Exportação em:
-  - Laudo técnico PDF
-  - Planilha Excel (opcional)
-  - TXT no padrão do sistema **Projefweb**
+- Leitura automatizada de valores mensais pagos
+- Detecção de promoções (Classe A → G)
+- Cálculo de valores devidos com base no reajuste de 15% por classe
+- Considera adicional de férias (1/3) e 13º salário
+- Geração de arquivo `.txt` no padrão **Projefweb**
 
----
+## 🚀 Como usar no Streamlit Cloud
 
-## 📦 Como Executar
+1. Crie um repositório no GitHub com os arquivos:
 
-1. Instale os pacotes:
+   - `app.py`
+   - `requirements.txt`
+   - `README.md`
+
+2. Acesse [https://streamlit.io/cloud](https://streamlit.io/cloud)
+
+3. Conecte seu GitHub e selecione o repositório
+
+4. Clique em **Deploy**
+
+5. Faça upload dos arquivos necessários e clique em **Executar Cálculo**
+
+## 🛠️ Requisitos Locais
+
+Se quiser rodar localmente:
 
 ```bash
 pip install -r requirements.txt
-```
-
-2. Execute com Streamlit:
-
-```bash
-streamlit run app_cronologia_promocao_mensal.py
-```
-
----
-
-## 📁 Uploads Esperados
-
-- **Ficha Financeira**: PDF com colunas de meses e campo "Ano Comp".
-- **Ficha Cadastral**: Um ou mais PDFs com datas de promoção e códigos como `AGPMNJ4F40`, `PCEG440`, etc.
-
----
-
-## 🧮 Fórmula Aplicada
-
-Para cada mês:
-
-```
-Valor Devido = BaseClasseA * (1.15 ^ Nível)
-```
-
-Diferença = Valor Devido - Valor Pago
-
----
-
-## 📌 Observações Técnicas
-
-- Datas como `01/11/2022` são aplicadas a partir do mês **11/2022**.
-- A classe anterior se mantém até a nova promoção.
-- O valor base da Classe A é configurável na interface.
-
----
-
-## 👨‍⚖️ Aplicação
-
-Sistema ideal para gerar cálculos em ações judiciais, perícias técnicas, defesas administrativas e projeções de impacto financeiro.
-
----
+streamlit run app.py
