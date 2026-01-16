@@ -1,38 +1,66 @@
-# 🧮 Sistema de Cálculo PC/AL (Streamlit Cloud)
+# 📊 Sistema de Cálculo PC/AL - Promoções Manuais
 
-Sistema automatizado para calcular diferenças salariais por evolução de classe com base em:
+Este sistema realiza o cálculo automático de diferenças salariais entre valores pagos e valores devidos com base na progressão funcional (classe A até G), focado em servidores públicos do Estado de Alagoas.
 
-- 📄 Ficha Financeira (PDF)
-- 📂 Fichas Cadastrais (PDFs)
+---
 
 ## ✅ Funcionalidades
 
-- Leitura automatizada de valores mensais pagos
-- Detecção de promoções (Classe A → G)
-- Cálculo de valores devidos com base no reajuste de 15% por classe
-- Considera adicional de férias (1/3) e 13º salário
-- Geração de arquivo `.txt` no padrão **Projefweb**
+- Upload de múltiplas Fichas Financeiras (PDF) — uma por ano
+- Leitura estruturada de Subsídio, Adicional de Férias e 13º Salário
+- Entrada manual das promoções (mês/ano + classe)
+- Cálculo automático com reajuste de 15% por classe
+- Exportação para PDF Laudo Técnico e TXT compatível com o Projefweb
 
-## 🚀 Como usar no Streamlit Cloud
+---
 
-1. Crie um repositório no GitHub com os arquivos:
+## 🛠️ Tecnologias utilizadas
 
-   - `app.py`
-   - `requirements.txt`
-   - `README.md`
+- `Streamlit` — Interface web
+- `pdfplumber` — Leitura estruturada de PDFs
+- `pandas` — Processamento de dados
+- `fpdf` — Geração de PDF laudo
 
-2. Acesse [https://streamlit.io/cloud](https://streamlit.io/cloud)
+---
 
-3. Conecte seu GitHub e selecione o repositório
+## 🚀 Como executar
 
-4. Clique em **Deploy**
-
-5. Faça upload dos arquivos necessários e clique em **Executar Cálculo**
-
-## 🛠️ Requisitos Locais
-
-Se quiser rodar localmente:
+### 1. Instale as dependências
 
 ```bash
 pip install -r requirements.txt
-streamlit run app.py
+```
+
+### 2. Execute o app
+
+```bash
+streamlit run app_promocao_manual.py
+```
+
+---
+
+## ✍️ Formato de entrada para promoções
+
+Você deve informar manualmente as datas de promoção no seguinte formato:
+
+```
+01/2016 - E
+04/2020 - F
+04/2025 - G
+```
+
+Cada linha representa uma promoção. A classe passa a valer a partir do mês informado.
+
+---
+
+## 📂 Estrutura recomendada
+
+- `/app_promocao_manual.py`
+- `/requirements.txt`
+- `/README.md`
+
+---
+
+## 📬 Contato
+
+Desenvolvido para uso jurídico e pericial.
