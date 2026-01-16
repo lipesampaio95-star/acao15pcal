@@ -45,8 +45,7 @@ def extrair_financeiro(arquivo):
                 continue
             ano = int(ano_match.group(1))
 
-            linhas = txt.split("
-")
+            linhas = txt.split("\n")
             for linha in linhas:
                 if "126.00" in linha and "SUBSIDIO" in linha.upper():
                     partes = linha.split()
