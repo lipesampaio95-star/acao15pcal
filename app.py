@@ -111,7 +111,7 @@ def gerar_pdf(df, nome, mat, total):
     p.ln()
     p.set_font("Arial", "", 9)
     for _, r in df.iterrows():
-        p.cell(larguras[0], 6, r["Data"].strftime("%m/%Y"), 1)
+        p.cell(larguras[0], 6, str(r["Data"].strftime("%m/%Y")), 1)
         p.cell(larguras[1], 6, r["Classe"], 1, 0, "C")
         p.cell(larguras[2], 6, f"R$ {fmt_br(r['Valor_Pago'])}", 1, 0, "R")
         p.cell(larguras[3], 6, f"R$ {fmt_br(r['Valor_Devido'])}", 1, 0, "R")
