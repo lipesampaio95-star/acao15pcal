@@ -1,66 +1,30 @@
-# 📊 Sistema de Cálculo PC/AL - Promoções Manuais
+# ⚖️ Calculadora de Diferença de Classe (PC/AL)
 
-Este sistema realiza o cálculo automático de diferenças salariais entre valores pagos e valores devidos com base na progressão funcional (classe A até G), focado em servidores públicos do Estado de Alagoas.
+Sistema jurídico automatizado para cálculo de diferenças remuneratórias de servidores da Polícia Civil de Alagoas (PC/AL), conforme a Lei nº 7.602/2014.
 
----
+## 📋 Funcionalidades
 
-## ✅ Funcionalidades
-
-- Upload de múltiplas Fichas Financeiras (PDF) — uma por ano
-- Leitura estruturada de Subsídio, Adicional de Férias e 13º Salário
-- Entrada manual das promoções (mês/ano + classe)
-- Cálculo automático com reajuste de 15% por classe
-- Exportação para PDF Laudo Técnico e TXT compatível com o Projefweb
-
----
-
-## 🛠️ Tecnologias utilizadas
-
-- `Streamlit` — Interface web
-- `pdfplumber` — Leitura estruturada de PDFs
-- `pandas` — Processamento de dados
-- `fpdf` — Geração de PDF laudo
+- Leitura automática das **fichas financeiras** (1 PDF por ano).
+- Registro **manual** das promoções por **classe** e **nível**.
+- Cálculo completo das diferenças com base nos seguintes critérios:
+  - **Progressão Horizontal (Classe)**: +15% por classe.
+  - **Progressão Vertical (Nível)**: +5% por nível.
+  - Consideração do **adicional de férias** (linha 133.00).
+- Geração de:
+  - 📄 Laudo técnico em PDF.
+  - 📑 Arquivo ProjefWeb compatível (.txt).
+  - 📊 Relatório Excel com todos os dados.
+- Interface visual simples via **Streamlit**.
 
 ---
 
-## 🚀 Como executar
+## 📂 Estrutura esperada dos arquivos
 
-### 1. Instale as dependências
+### Fichas Financeiras (PDF)
+- Deve conter a estrutura padrão do Portal do Servidor.
+- Um arquivo por **ano**.
+- Informações extraídas automaticamente da tabela de **Subsídio** e **Adicional de Férias**.
 
-```bash
-pip install -r requirements.txt
-```
-
-### 2. Execute o app
-
-```bash
-streamlit run app_promocao_manual.py
-```
-
----
-
-## ✍️ Formato de entrada para promoções
-
-Você deve informar manualmente as datas de promoção no seguinte formato:
-
-```
-01/2016 - E
-04/2020 - F
-04/2025 - G
-```
-
-Cada linha representa uma promoção. A classe passa a valer a partir do mês informado.
-
----
-
-## 📂 Estrutura recomendada
-
-- `/app_promocao_manual.py`
-- `/requirements.txt`
-- `/README.md`
-
----
-
-## 📬 Contato
-
-Desenvolvido para uso jurídico e pericial.
+### Promoções (Entrada Manual)
+- Datas e classes/níveis devem ser informados via painel lateral no app.
+- Exemplo:
